@@ -1,0 +1,12 @@
+openai
+python-dotenv
+colorama
+rich
+pyyaml
+requests
+pyautogui
+schedule
+pvporcupine
+pyaudio
+numpy
+pyttsx3
