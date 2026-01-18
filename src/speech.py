@@ -607,3 +607,4 @@ class SpeechRecognizer:
                 self.stop_recording()
                 break
             time.sleep(0.1)
+        }
