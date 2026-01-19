@@ -403,3 +403,319 @@ class SecurityManager:
         # This is a placeholder
         return True
     
+    def log_access(self, user_id: str, action: str, success: bool):
+        """Log access attempt."""
+        self.access_log.append({
+            'timestamp': datetime.datetime.now(),
+            'user_id': user_id,
+            'action': action,
+            'success': success,
+            'ip': self._get_client_ip()
+        })
+        
+        if not success:
+            self.failed_attempts[user_id] += 1
+            if self.failed_attempts[user_id] >= self.lockout_threshold:
+                logger.warning(f"User {user_id} locked out due to multiple failed attempts")
+    
+    def is_locked_out(self, user_id: str) -> bool:
+        """Check if user is locked out."""
+        if user_id in self.failed_attempts:
+            # Reset after lockout duration
+            if self.failed_attempts[user_id] >= self.lockout_threshold:
+                # In real implementation, check timestamp
+                return True
+        return False
+    
+    def _get_client_ip(self) -> str:
+        """Get client IP address."""
+        # Implementation depends on your network setup
+        return "127.0.0.1"
+
+class AnalyticsEngine:
+    """Advanced analytics engine."""
+    
+    def __init__(self):
+        self.db_path = Path('analytics.db')
+        self._init_database()
+        
+    def _init_database(self):
+        """Initialize analytics database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create tables
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS interactions (
+            id TEXT PRIMARY KEY,
+            timestamp DATETIME,
+            user_id TEXT,
+            input_type TEXT,
+            input_length INTEGER,
+            response_time REAL,
+            emotion TEXT,
+            command_executed TEXT,
+            success BOOLEAN
+        )
+        ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS performance_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME,
+            metric_name TEXT,
+            metric_value REAL,
+            unit TEXT
+        )
+        ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_behavior (
+            user_id TEXT,
+            timestamp DATETIME,
+            action_type TEXT,
+            action_details TEXT,
+            duration REAL
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
+    
+    def log_interaction(self, entry: ConversationEntry, user_id: str, response_time: float):
+        """Log interaction to analytics."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        INSERT INTO interactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            entry.id,
+            entry.timestamp,
+            user_id,
+            'speech',
+            len(entry.user_input),
+            response_time,
+            entry.emotion.value,
+            entry.command_executed or '',
+            entry.execution_result is not None
+        ))
+        
+        conn.commit()
+        conn.close()
+    
+    def get_daily_stats(self, date: datetime.date) -> Dict[str, Any]:
+        """Get daily statistics."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        start_date = datetime.datetime(date.year, date.month, date.day)
+        end_date = start_date + datetime.timedelta(days=1)
+        
+        cursor.execute('''
+        SELECT 
+            COUNT(*) as total_interactions,
+            AVG(response_time) as avg_response_time,
+            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_interactions
+        FROM interactions 
+        WHERE timestamp BETWEEN ? AND ?
+        ''', (start_date, end_date))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        return {
+            'total_interactions': result[0] if result else 0,
+            'avg_response_time': result[1] if result and result[1] else 0,
+            'success_rate': (result[2] / result[0] * 100) if result and result[0] > 0 else 0
+        }
+
+class MultiModalProcessor:
+    """Enhanced multimodal processor."""
+    
+    def __init__(self):
+        self.active_modalities = set()
+        self.image_processors = {}
+        self.audio_processors = {}
+        self.sensor_processors = {}
+        
+    async def process_image(self, image_path: str) -> Dict[str, Any]:
+        """Process image input."""
+        try:
+            # Placeholder for actual image processing
+            # In production, integrate with OpenCV, PIL, etc.
+            return {
+                "description": "Image detected",
+                "objects": [],
+                "sentiment": "neutral",
+                "colors": []
+            }
+        except Exception as e:
+            logger.error(f"Image processing failed: {e}")
+            return {"error": str(e)}
+    
+    async def process_audio_emotion(self, audio_data: np.ndarray) -> EmotionState:
+        """Analyze audio for emotional tone."""
+        # Placeholder for audio emotion analysis
+        return EmotionState.NEUTRAL
+    
+    async def process_sensor_data(self, sensor_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Process sensor data."""
+        # Placeholder for IoT/sensor integration
+        return {
+            "sensor_type": sensor_type,
+            "processed": True,
+            "data": data
+        }
+
+class PersonalityManager:
+    """Enhanced personality manager."""
+    
+    def __init__(self):
+        self.traits = {
+            "formality": 0.7,
+            "humor": 0.5,
+            "verbosity": 0.6,
+            "initiative": 0.8,
+            "creativity": 0.5,
+            "empathy": 0.7,
+            "assertiveness": 0.6
+        }
+        self.mood = EmotionState.NEUTRAL
+        self.mood_history = deque(maxlen=100)
+        self.adaptation_rules = self._load_adaptation_rules()
+        
+    def _load_adaptation_rules(self) -> Dict[str, Callable]:
+        """Load personality adaptation rules."""
+        return {
+            "time_of_day": self._adapt_to_time_of_day,
+            "user_mood": self._adapt_to_user_mood,
+            "conversation_topic": self._adapt_to_topic,
+            "interaction_history": self._adapt_to_history
+        }
+    
+    def adapt_personality(self, context: Dict[str, Any]):
+        """Adapt personality based on context."""
+        for rule_name, rule_func in self.adaptation_rules.items():
+            if rule_name in context:
+                rule_func(context[rule_name])
+        
+        # Record mood for history
+        self.mood_history.append({
+            'timestamp': datetime.datetime.now(),
+            'mood': self.mood,
+            'traits': self.traits.copy()
+        })
+    
+    def _adapt_to_time_of_day(self, hour: int):
+        """Adapt personality based on time of day."""
+        if 22 <= hour or hour < 5:  # Late night/early morning
+            self.traits["verbosity"] *= 0.8  # Be more concise
+            self.traits["humor"] *= 0.7  # Less humor at night
+        elif 5 <= hour < 12:  # Morning
+            self.traits["initiative"] *= 1.2  # More proactive in morning
+    
+    def _adapt_to_user_mood(self, user_mood: str):
+        """Adapt to user's perceived mood."""
+        if user_mood == "stressed":
+            self.traits["empathy"] *= 1.3
+            self.traits["humor"] *= 0.7
+        elif user_mood == "happy":
+            self.traits["humor"] *= 1.2
+    
+    def _adapt_to_topic(self, topic: str):
+        """Adapt to conversation topic."""
+        serious_topics = ["work", "business", "finance", "health"]
+        if topic in serious_topics:
+            self.traits["formality"] *= 1.2
+            self.traits["humor"] *= 0.8
+    
+    def _adapt_to_history(self, history: List[ConversationEntry]):
+        """Adapt based on interaction history."""
+        if len(history) > 10:
+            # User is chatty, increase engagement
+            self.traits["initiative"] *= 1.1
+            self.traits["verbosity"] *= 1.05
+
+class ContextManager:
+    """Enhanced context manager."""
+    
+    def __init__(self, max_history: int = 100):
+        self.conversation_history = deque(maxlen=max_history)
+        self.user_profiles: Dict[str, UserProfile] = {}
+        self.session_context = {
+            "current_topic": None,
+            "mentioned_entities": [],
+            "active_tasks": [],
+            "user_mood": "neutral",
+            "conversation_depth": 0,
+            "last_commands": deque(maxlen=10),
+            "environmental_context": {}
+        }
+        
+    def add_conversation_entry(self, entry: ConversationEntry):
+        """Add a conversation to history."""
+        self.conversation_history.append(entry)
+        
+    def get_recent_context(self, n: int = 10) -> List[ConversationEntry]:
+        """Get recent conversation context."""
+        return list(self.conversation_history)[-n:]
+        
+    def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
+        """Get user profile."""
+        return self.user_profiles.get(user_id)
+    
+    def create_user_profile(self, user_id: str, name: str, **kwargs) -> UserProfile:
+        """Create a new user profile."""
+        profile = UserProfile(
+            user_id=user_id,
+            name=name,
+            voice_profile={},
+            preferences=kwargs.get('preferences', {}),
+            permissions=kwargs.get('permissions', {'basic'}),
+            learning_data={},
+            last_active=datetime.datetime.now(),
+            security_level=SecurityLevel.USER
+        )
+        self.user_profiles[user_id] = profile
+        return profile
+
+class PluginManager:
+    """Manage Jarvis plugins."""
+    
+    def __init__(self, jarvis_instance: 'Jarvis'):
+        self.jarvis = jarvis_instance
+        self.plugins: Dict[str, PluginBase] = {}
+        self.plugin_dirs = ['plugins']
+        
+    async def discover_plugins(self):
+        """Discover available plugins."""
+        for plugin_dir in self.plugin_dirs:
+            if Path(plugin_dir).exists():
+                self._load_plugins_from_dir(plugin_dir)
+    
+    def _load_plugins_from_dir(self, plugin_dir: str):
+        """Load plugins from directory."""
+        for module_info in pkgutil.iter_modules([plugin_dir]):
+            try:
+                module = importlib.import_module(f"{plugin_dir}.{module_info.name}")
+                for name, obj in inspect.getmembers(module):
+                    if (inspect.isclass(obj) and 
+                        issubclass(obj, PluginBase) and 
+                        obj != PluginBase):
+                        plugin_instance = obj(self.jarvis)
+                        self.plugins[plugin_instance.name] = plugin_instance
+                        logger.info(f"Loaded plugin: {plugin_instance.name} v{plugin_instance.version}")
+            except Exception as e:
+                logger.error(f"Failed to load plugin from {module_info.name}: {e}")
+    
+    async def initialize_plugins(self):
+        """Initialize all plugins."""
+        for plugin in self.plugins.values():
+            if plugin.enabled:
+                try:
+                    await plugin.initialize()
+                    logger.info(f"Initialized plugin: {plugin.name}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize plugin {plugin.name}: {e}")
+    
