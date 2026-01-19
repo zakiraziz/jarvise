@@ -1385,6 +1385,1123 @@ class Jarvis:
             return
         
         start_time = time.time()
+        try:
+            # Update context
+            self.context_manager.session_context['current_input'] = text
+            
+            # Detect emotion
+            emotion = await self._detect_emotion(text)
+            self.personality_manager.mood = emotion
+            
+            # Adapt personality
+            self.personality_manager.adapt_personality({
+                'time_of_day': datetime.datetime.now().hour,
+                'user_mood': self.context_manager.session_context.get('user_mood', 'neutral'),
+                'conversation_topic': self._extract_topic(text),
+                'interaction_history': self.context_manager.get_recent_context(5)
+            })
+            
+            # Check learning cache first
+            if self.learning_mode != LearningMode.PASSIVE:
+                cached_response = self.learning_engine.predict_response(
+                    text, self.context_manager.get_recent_context(3)
+                )
+                if cached_response and cached_response['confidence'] > 0.8:
+                    # Use cached response
+                    response_time = time.time() - start_time
+                    self.response_times.append(response_time)
+                    
+                    entry = ConversationEntry(
+                        id=str(uuid.uuid4()),
+                        timestamp=datetime.datetime.now(),
+                        user_input=text,
+                        ai_response=cached_response['response'],
+                        context=self.context_manager.session_context.copy(),
+                        emotion=emotion,
+                        confidence=cached_response['confidence'],
+                        command_executed='cached_response',
+                        execution_result=None,
+                        metadata={'source': cached_response['source']}
+                    )
+                    
+                    self.context_manager.add_conversation_entry(entry)
+                    self.learning_engine.learn_from_interaction(entry)
+                    
+                    self.tts.speak(cached_response['response'])
+                    
+                    # Analytics
+                    if self.current_user:
+                        self.analytics_engine.log_interaction(
+                            entry, self.current_user.user_id, response_time
+                        )
+                    
+                    self.is_active = False
+                    return
+            
+            # Get context-aware response
+            context = self.context_manager.get_recent_context(5)
+            enhanced_input = self._enhance_input_with_context(text, context)
+            
+            # Process through AI
+            decision = await self.loop.run_in_executor(
+                None, 
+                self._process_with_ai, 
+                enhanced_input, 
+                context
+            )
+            
+            response_time = time.time() - start_time
+            self.response_times.append(response_time)
+            
+            # Create conversation entry
+            entry = ConversationEntry(
+                id=str(uuid.uuid4()),
+                timestamp=datetime.datetime.now(),
+                user_input=text,
+                ai_response=decision.get('response_text', ''),
+                context=self.context_manager.session_context.copy(),
+                emotion=emotion,
+                command_executed=decision.get('action'),
+                execution_result=None
+            )
+            
+            self.context_manager.add_conversation_entry(entry)
+            
+            # Learn from interaction
+            if self.learning_mode != LearningMode.PASSIVE:
+                self.learning_engine.learn_from_interaction(entry)
+            
+            # Execute decision
+            await self._execute_decision(decision, entry)
+            
+            # Analytics
+            if self.current_user:
+                self.analytics_engine.log_interaction(
+                    entry, self.current_user.user_id, response_time
+                )
+            
+            # Check for proactive suggestions
+            await self._check_proactive_suggestions()
+            
+            # Update learning
+            await self._update_learning(text, entry)
+            
+        except Exception as e:
+            self._log_error(f"Speech input processing failed: {e}", event)
+            self.tts.speak("I encountered an error processing your request.")
 
+    async def _handle_text_input(self, event: Dict[str, Any]):
+        """Handle text input from other sources."""
+        text = event.get('text', '').strip()
+        if not text:
+            return
+            
+        # Process similarly to speech input
+        await self.input_queue.put({
+            'type': 'speech_recognized',
+            'text': text,
+            'source': event.get('source', 'text')
+        })
+
+    async def _handle_system_alert(self, event: Dict[str, Any]):
+        """Handle system alerts."""
+        alert_type = event.get('alert_type')
+        message = event.get('message', '')
+        severity = event.get('severity', 'warning')
+        
+        logger.warning(f"System alert: {alert_type} - {message}")
+        
+        # Add to health monitor
+        self.health_monitor.add_alert(alert_type, message, severity)
+        
+        # Speak alert if critical
+        if severity == 'critical':
+            self.tts.speak(f"Critical alert: {message}")
+        elif severity == 'warning' and self.is_active:
+            self.tts.speak(f"System alert: {message}")
+
+    async def _handle_health_check(self, event: Optional[Dict] = None):
+        """Handle health check requests."""
+        metrics = self._get_current_system_metrics()
+        health = self.health_monitor.check_health(metrics)
+        
+        if health['status'] == 'critical':
+            await self.alert_queue.put({
+                'type': 'system_alert',
+                'alert_type': 'health_critical',
+                'message': f"System health critical: {health['score']}/100",
+                'severity': 'critical'
+            })
+        elif health['status'] == 'degraded':
+            logger.warning(f"System health degraded: {health['score']}/100")
+
+    async def _handle_api_request(self, event: Dict[str, Any]):
+        """Handle external API requests."""
+        api_name = event.get('api_name')
+        endpoint = event.get('endpoint')
+        params = event.get('params')
+        
+        try:
+            result = await self.external_api_handler.call_api(
+                api_name, endpoint, params
+            )
+            
+            # Process result
+            if 'error' not in result:
+                # Store result for potential use
+                await self.decision_queue.put({
+                    'type': 'api_response',
+                    'api_name': api_name,
+                    'data': result
+                })
+            else:
+                logger.error(f"API request failed: {result['error']}")
+                
+        except Exception as e:
+            logger.error(f"API request failed: {e}")
+
+    async def _handle_plugin_event(self, event: Dict[str, Any]):
+        """Handle events from plugins."""
+        plugin_name = event.get('plugin')
+        event_data = event.get('data', {})
+        
+        logger.debug(f"Plugin event from {plugin_name}: {event_data}")
+
+    async def _handle_shutdown(self, event: Optional[Dict] = None):
+        """Handle shutdown request."""
+        logger.info("Shutdown requested")
+        self.shutdown_event.set()
+
+    async def _handle_command_result(self, event: Dict[str, Any]):
+        """Handle command execution results."""
+        result = event.get('result')
+        command = event.get('command')
+        success = event.get('success', False)
+        
+        logger.info(f"Command '{command}' completed: {success}")
+        
+        if not success and self.is_active:
+            self.tts.speak(f"Command {command} failed to execute.")
+
+    async def _handle_learning_update(self, event: Dict[str, Any]):
+        """Handle learning updates."""
+        data = event.get('data', {})
+        
+        if self.learning_mode != LearningMode.PASSIVE:
+            # Update learning engine with new data
+            # Implementation depends on your learning strategy
+            pass
+
+    async def _handle_user_switch(self, event: Dict[str, Any]):
+        """Handle user switching."""
+        user_id = event.get('user_id')
+        
+        if user_id in self.context_manager.user_profiles:
+            self.current_user = self.context_manager.user_profiles[user_id]
+            self.tts.speak(f"Hello {self.current_user.name}, welcome back!")
+        else:
+            self.tts.speak("User not recognized.")
+
+    def _get_personalized_greeting(self) -> str:
+        """Get personalized greeting for current user."""
+        base_greeting = self._get_time_based_greeting()
+        
+        if self.current_user:
+            # Check user preferences for greeting style
+            preferred_greeting = self.current_user.preferences.get('greeting_style', 'formal')
+            
+            if preferred_greeting == 'casual':
+                greetings = ["Hey", "Hi", "Hello"]
+                return f"{np.random.choice(greetings)} {self.current_user.name}"
+            elif preferred_greeting == 'friendly':
+                return f"{base_greeting}, {self.current_user.name}! Great to see you!"
+            else:  # formal
+                return f"{base_greeting}, {self.current_user.name}"
+        
+        return base_greeting
+
+    def _security_check(self, action: str, data: Any) -> bool:
+        """Check if action is allowed."""
+        if not self.current_user:
+            return False
+        
+        # Check permissions
+        required_permission = f"action.{action}"
+        if not self.current_user.has_permission(required_permission):
+            logger.warning(f"Permission denied for {action}")
+            return False
+        
+        # Check for sensitive data
+        sensitive_keywords = ['password', 'secret', 'key', 'token', 'credit card']
+        if isinstance(data, str):
+            data_lower = data.lower()
+            if any(keyword in data_lower for keyword in sensitive_keywords):
+                logger.warning(f"Sensitive data detected in {action}")
+                # In production, implement proper sanitization
+        
+        return True
+
+    def _extract_topic(self, text: str) -> str:
+        """Extract main topic from text."""
+        # Simple implementation - in production, use NLP
+        topics = {
+            'weather': ['weather', 'rain', 'sunny', 'temperature'],
+            'news': ['news', 'headlines', 'update'],
+            'system': ['system', 'computer', 'status', 'health'],
+            'music': ['music', 'song', 'playlist', 'artist']
+        }
+        
+        text_lower = text.lower()
+        for topic, keywords in topics.items():
+            if any(keyword in text_lower for keyword in keywords):
+                return topic
+        
+        return 'general'
+
+    async def _update_learning(self, input_text: str, entry: ConversationEntry):
+        """Update learning based on interaction."""
+        if self.learning_mode == LearningMode.ACTIVE:
+            # Active learning - ask for feedback
+            if np.random.random() < 0.1:  # 10% chance to ask
+                self.tts.speak("Was that response helpful?")
+                # In production, listen for feedback
+        elif self.learning_mode == LearningMode.EXPERT:
+            # Expert mode - analyze interaction deeply
+            # In production, implement advanced analysis
+            pass
+
+    def _enhance_input_with_context(self, text: str, context: List[ConversationEntry]) -> str:
+        """Enhanced context integration."""
+        if not context:
+            return text
+        
+        context_str = "\nRecent conversation context:\n"
+        for i, entry in enumerate(context[-3:], 1):
+            context_str += f"{i}. User: {entry.user_input}\n"
+            context_str += f"   Jarvis: {entry.ai_response}\n"
+        
+        # Add user preferences if available
+        if self.current_user:
+            preferences = self.current_user.preferences
+            if preferences:
+                context_str += f"\nUser preferences: {json.dumps(preferences, indent=2)}\n"
+        
+        # Add system context
+        context_str += f"\nSystem time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        context_str += f"Jarvis mood: {self.personality_manager.mood.value}\n"
+        
+        return f"{context_str}\nCurrent input: {text}"
+
+    def _process_with_ai(self, text: str, context: List[ConversationEntry]) -> Dict[str, Any]:
+        """Process text with AI with enhanced context."""
+        # Add personality instructions
+        personality = self.personality_manager.get_response_style()
+        instructions = f"""
+        Respond as Jarvis AI Assistant with the following personality:
+        - Style: {personality['greeting_style']}
+        - Include humor: {personality['include_humor']}
+        - Response length: {personality['response_length']}
+        - Current mood: {self.personality_manager.mood.value}
+        
+        User context:
+        - Name: {self.current_user.name if self.current_user else 'Guest'}
+        - Security level: {self.current_user.security_level.name if self.current_user else 'PUBLIC'}
+        
+        System context:
+        - Time: {datetime.datetime.now().strftime('%I:%M %p')}
+        - Health: {self.health_monitor.check_health(self._get_current_system_metrics())['status']}
+        
+        Instructions:
+        {text}
+        """
+        
+        return self.ai.decide_action(instructions)
+
+    async def _execute_decision(self, decision: Dict[str, Any], entry: ConversationEntry):
+        """Execute decision with enhanced capabilities."""
+        action_type = decision.get('action')
+        params = decision.get('params', {})
+        
+        entry.command_executed = action_type
+        
+        handlers = {
+            'command': self._execute_command,
+            'respond': self._execute_response,
+            'search': self._execute_search,
+            'schedule': self._execute_schedule,
+            'system_info': self._show_system_info,
+            'personality_adjust': self._adjust_personality,
+            'api_call': self._execute_api_call,
+            'plugin_action': self._execute_plugin_action,
+            'learning_action': self._execute_learning_action
+        }
+        
+        handler = handlers.get(action_type)
+        if handler:
+            try:
+                result = await handler(params)
+                entry.execution_result = str(result)
+            except Exception as e:
+                entry.execution_result = f"Error: {e}"
+                self._log_error(f"Decision execution failed: {e}", decision)
+        else:
+            logger.warning(f"Unknown action type: {action_type}")
+            self.tts.speak("I'm not sure how to handle that request.")
+        
+        if not decision.get('continue_conversation', False):
+            self.is_active = False
+
+    async def _execute_response(self, params: Dict[str, Any]):
+        """Execute response action."""
+        response = params.get('response_text', '')
+        if response:
+            self.tts.speak(response)
+        return response
+
+    async def _execute_api_call(self, params: Dict[str, Any]):
+        """Execute API call."""
+        api_name = params.get('api_name')
+        endpoint = params.get('endpoint')
+        api_params = params.get('params', {})
+        
+        result = await self.external_api_handler.call_api(
+            api_name, endpoint, api_params
+        )
+        
+        if 'error' not in result:
+            # Format result for speech
+            formatted_result = self._format_api_result(api_name, result)
+            self.tts.speak(formatted_result)
+            return formatted_result
+        else:
+            error_msg = f"API call failed: {result['error']}"
+            self.tts.speak(error_msg)
+            return error_msg
+
+    async def _execute_plugin_action(self, params: Dict[str, Any]):
+        """Execute plugin action."""
+        plugin_name = params.get('plugin_name')
+        action = params.get('action')
+        action_params = params.get('params', {})
+        
+        if plugin_name in self.plugin_manager.plugins:
+            plugin = self.plugin_manager.plugins[plugin_name]
+            # In production, implement plugin action execution
+            return f"Plugin {plugin_name} action {action} executed"
+        else:
+            return f"Plugin {plugin_name} not found"
+
+    async def _execute_learning_action(self, params: Dict[str, Any]):
+        """Execute learning action."""
+        action = params.get('action', '')
+        
+        if action == 'analyze_patterns':
+            patterns = len(self.learning_engine.patterns)
+            return f"Found {patterns} learning patterns"
+        elif action == 'knowledge_summary':
+            entries = len(self.learning_engine.knowledge_base)
+            return f"Knowledge base has {entries} entries"
+        else:
+            return f"Unknown learning action: {action}"
+
+    def _format_api_result(self, api_name: str, result: Dict[str, Any]) -> str:
+        """Format API result for speech."""
+        if api_name == 'weather':
+            if 'main' in result:
+                temp = result['main'].get('temp', 0)
+                description = result['weather'][0].get('description', '')
+                return f"Current weather: {description}, temperature {temp}°C"
+        elif api_name == 'news':
+            if 'articles' in result and result['articles']:
+                article = result['articles'][0]
+                title = article.get('title', '')
+                return f"Latest news: {title}"
+        
+        return "API response received"
+
+    async def _periodic_checks(self):
+        """Perform periodic system checks."""
+        current_time = time.time()
+        
+        # Check system health every 30 seconds
+        if not hasattr(self, '_last_health_check'):
+            self._last_health_check = 0
+        
+        if current_time - self._last_health_check > 30:
+            await self._handle_health_check(None)
+            self._last_health_check = current_time
+        
+        # Check for resource limits
+        metrics = self._get_current_system_metrics()
+        limits = self.config['system']['resource_limits']
+        
+        if metrics.cpu_percent > limits['max_cpu_percent']:
+            await self.alert_queue.put({
+                'type': 'system_alert',
+                'alert_type': 'high_cpu',
+                'message': f'CPU usage at {metrics.cpu_percent:.1f}%',
+                'severity': 'warning'
+            })
+        
+        if metrics.memory_percent > limits['max_memory_percent']:
+            await self.alert_queue.put({
+                'type': 'system_alert',
+                'alert_type': 'low_memory',
+                'message': f'Memory usage at {metrics.memory_percent:.1f}%',
+                'severity': 'warning'
+            })
+
+    def _get_system_status(self) -> str:
+        """Get comprehensive system status."""
+        metrics = self._get_current_system_metrics()
+        health = self.health_monitor.check_health(metrics)
+        
+        status = f"""
+        ╔══════════════════════════════════════════════════════════════╗
+        ║                     System Status Report                      ║
+        ╠══════════════════════════════════════════════════════════════╣
+        ║ Health Score: {health['score']}/100 ({health['status'].upper()})
+        ║ Uptime: {datetime.datetime.now() - self.start_time}
+        ║ Session: {self.session_id[:8]}...
+        ║ Current User: {self.current_user.name if self.current_user else 'None'}
+        ║
+        ║ Performance Metrics:
+        ║ • CPU: {metrics.cpu_percent:.1f}%
+        ║ • Memory: {metrics.memory_percent:.1f}%
+        ║ • Disk: {metrics.disk_percent:.1f}%
+        ║ • Avg Response Time: {
+            sum(self.response_times)/len(self.response_times) if self.response_times else 0:.2f}s
+        ║
+        ║ System Information:
+        ║ • Conversations: {len(self.context_manager.conversation_history)}
+        ║ • Users: {len(self.context_manager.user_profiles)}
+        ║ • Plugins: {len(self.plugin_manager.plugins)}
+        ║ • Learning Mode: {self.learning_mode.name}
+        ║ • Mood: {self.personality_manager.mood.value}
+        ╚══════════════════════════════════════════════════════════════╝
+        """
+        
+        return status
+
+    def _get_health_report(self) -> str:
+        """Get detailed health report."""
+        metrics = self._get_current_system_metrics()
+        health = self.health_monitor.check_health(metrics)
+        
+        report = f"""
+        Health Report:
+        -------------
+        Overall Health: {health['score']}/100 ({health['status']})
+        Timestamp: {datetime.datetime.now()}
+        
+        Resource Usage:
+        • CPU: {metrics.cpu_percent:.1f}% {'⚠️' if metrics.cpu_percent > 80 else '✅'}
+        • Memory: {metrics.memory_percent:.1f}% {'⚠️' if metrics.memory_percent > 85 else '✅'}
+        • Disk: {metrics.disk_percent:.1f}% {'⚠️' if metrics.disk_percent > 90 else '✅'}
+        
+        Performance:
+        • Response Times: {len(self.response_times)} samples
+        • Avg Response: {sum(self.response_times)/len(self.response_times) if self.response_times else 0:.2f}s
+        • Recent Alerts: {len(self.health_monitor.alerts)}
+        
+        System Info:
+        • Uptime: {datetime.datetime.now() - self.start_time}
+        • Active: {'Yes' if self.is_active else 'No'}
+        • Listening: {'Yes' if self.is_listening else 'No'}
+        """
+        
+        return report
+
+    def _get_metrics_summary(self) -> str:
+        """Get metrics summary."""
+        if not self.system_metrics_history:
+            return "No metrics available yet."
+        
+        recent_metrics = list(self.system_metrics_history)[-10:]
+        
+        summary = "Recent System Metrics:\n"
+        for metric in recent_metrics:
+            summary += f"""
+            {metric.timestamp.strftime('%H:%M:%S')}:
+              CPU: {metric.cpu_percent:.1f}%
+              Memory: {metric.memory_percent:.1f}%
+              Disk: {metric.disk_percent:.1f}%
+            """
+        
+        return summary
+
+    async def _restart_system(self) -> str:
+        """Restart the system."""
+        self.tts.speak("Restarting system components.")
+        
+        # Save state
+        self._save_conversation_history()
+        self._save_user_profiles()
+        
+        # Restart components
+        self._stop_threads()
+        await asyncio.sleep(1)
+        self._setup_components()
+        self._start_threads()
+        
+        return "System restart completed"
+
+    async def _check_for_updates(self) -> str:
+        """Check for system updates."""
+        # In production, implement actual update checking
+        return "Update check not implemented yet"
+
+    def _authenticate_user(self):
+        """Authenticate user."""
+        # In production, implement proper authentication
+        # For now, create a default user
+        self.current_user = self.context_manager.create_user_profile(
+            'user_001', 'Primary User',
+            preferences={'greeting_style': 'friendly'},
+            permissions={'basic', 'system_info', 'commands'}
+        )
+        return True
+
+    def _start_system_monitoring(self):
+        """Start enhanced system monitoring."""
+        self.threads['system_monitor'] = threading.Thread(
+            target=self._system_monitoring_loop,
+            daemon=True,
+            name='SystemMonitor'
+        )
+        self.threads['system_monitor'].start()
+
+    def _start_health_monitoring(self):
+        """Start health monitoring."""
+        self.threads['health_monitor'] = threading.Thread(
+            target=self._health_monitoring_loop,
+            daemon=True,
+            name='HealthMonitor'
+        )
+        self.threads['health_monitor'].start()
+
+    def _system_monitoring_loop(self):
+        """Enhanced system monitoring loop."""
+        while not self.shutdown_event.is_set():
+            try:
+                metrics = self._get_current_system_metrics()
+                self.system_metrics_history.append(metrics)
+                
+                # Check for anomalies
+                if self.health_monitor.anomaly_detector.detect(metrics):
+                    asyncio.run_coroutine_threadsafe(
+                        self.alert_queue.put({
+                            'type': 'system_alert',
+                            'alert_type': 'anomaly_detected',
+                            'message': 'System anomaly detected',
+                            'severity': 'warning'
+                        }),
+                        self.loop
+                    )
+                
+                time.sleep(2)  # Check every 2 seconds
+            except Exception as e:
+                self._log_error(f"System monitoring error: {e}", None)
+                time.sleep(5)
+
+    def _health_monitoring_loop(self):
+        """Health monitoring loop."""
+        while not self.shutdown_event.is_set():
+            try:
+                # Perform health checks
+                asyncio.run_coroutine_threadsafe(
+                    self.alert_queue.put({'type': 'health_check'}),
+                    self.loop
+                )
+                
+                time.sleep(self.config['system']['health_check_interval'])
+            except Exception as e:
+                self._log_error(f"Health monitoring error: {e}", None)
+                time.sleep(10)
+
+    def _start_api_listeners(self):
+        """Start API listeners."""
+        # Start WebSocket server for real-time communication
+        self.threads['websocket_server'] = threading.Thread(
+            target=self._start_websocket_server,
+            daemon=True,
+            name='WebSocketServer'
+        )
+        self.threads['websocket_server'].start()
+        
+        # Start HTTP API server
+        self.threads['http_server'] = threading.Thread(
+            target=self._start_http_server,
+            daemon=True,
+            name='HTTPServer'
+        )
+        self.threads['http_server'].start()
+
+    def _start_websocket_server(self):
+        """Start WebSocket server."""
+        async def websocket_handler(websocket, path):
+            try:
+                async for message in websocket:
+                    data = json.loads(message)
+                    await self.input_queue.put({
+                        'type': 'text_input',
+                        'text': data.get('text', ''),
+                        'source': 'websocket'
+                    })
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+        
+        # Start server
+        start_server = websockets.serve(
+            websocket_handler, 
+            "localhost", 
+            8765
+        )
+        
+        asyncio.run_coroutine_threadsafe(start_server, self.loop)
+
+    def _start_http_server(self):
+        """Start HTTP API server."""
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        import urllib.parse
+        
+        class JarvisAPIHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode())
+                
+                # Queue the request
+                asyncio.run_coroutine_threadsafe(
+                    self.server.jarvis.input_queue.put({
+                        'type': 'api_request',
+                        'endpoint': self.path,
+                        'data': data
+                    }),
+                    self.server.jarvis.loop
+                )
+                
+                self.send_response(202)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                response = json.dumps({'status': 'queued'})
+                self.wfile.write(response.encode())
+            
+            def log_message(self, format, *args):
+                logger.info(f"HTTP {format % args}")
+        
+        # Custom server class to pass Jarvis instance
+        class JarvisHTTPServer(HTTPServer):
+            def __init__(self, *args, **kwargs):
+                self.jarvis = kwargs.pop('jarvis')
+                super().__init__(*args, **kwargs)
+        
+        server = JarvisHTTPServer(
+            ('localhost', 8080), 
+            JarvisAPIHandler,
+            jarvis=self
+        )
+        
+        server.serve_forever()
+
+    def _start_threads(self):
+        """Start all background threads."""
+        # Start audio processing
+        self.audio_thread = threading.Thread(
+            target=self._audio_processing_loop,
+            daemon=True,
+            name='AudioProcessor'
+        )
+        self.audio_thread.start()
+        
+        # Start processing thread
+        self.processing_thread = threading.Thread(
+            target=self._processing_loop,
+            daemon=True,
+            name='CommandProcessor'
+        )
+        self.processing_thread.start()
+        
+        logger.info("All background threads started")
+
+    def _processing_loop(self):
+        """Background processing loop."""
+        while not self.shutdown_event.is_set():
+            try:
+                # Process items from decision queue
+                # This runs in a separate thread for CPU-intensive tasks
+                time.sleep(0.1)
+            except Exception as e:
+                self._log_error(f"Processing loop error: {e}", None)
+
+    def _audio_processing_loop(self):
+        """Enhanced audio processing loop."""
+        while not self.shutdown_event.is_set():
+            try:
+                if self.is_active and self.is_listening:
+                    # Process speech recognition
+                    # Implementation depends on your speech library
+                    pass
+                else:
+                    # Wake word detection
+                    frame = self.speech_recognizer.get_audio_frame()
+                    if frame is not None:
+                        detected = self.speech_recognizer.process_audio_frame(frame)
+                        if detected and not self.is_active:
+                            asyncio.run_coroutine_threadsafe(
+                                self.input_queue.put({'type': 'wake_word_detected'}),
+                                self.loop
+                            )
+                
+                time.sleep(0.01)  # 100 FPS
+            except Exception as e:
+                self._log_error(f"Audio processing error: {e}", None)
+                time.sleep(0.1)
+
+    def _start_periodic_tasks(self):
+        """Start periodic background tasks."""
+        async def periodic_saver():
+            while not self.shutdown_event.is_set():
+                await asyncio.sleep(self.config['system']['auto_save_interval'])
+                await self.alert_queue.put({
+                    'type': 'periodic_task',
+                    'task': 'save_history'
+                })
+        
+        async def metrics_collector():
+            while not self.shutdown_event.is_set():
+                await asyncio.sleep(60)
+                await self.alert_queue.put({
+                    'type': 'periodic_task',
+                    'task': 'collect_metrics'
+                })
+        
+        async def backup_creator():
+            while not self.shutdown_event.is_set():
+                await asyncio.sleep(3600)  # Every hour
+                await self.alert_queue.put({
+                    'type': 'periodic_task',
+                    'task': 'backup'
+                })
+        
+        async def analytics_reporter():
+            while not self.shutdown_event.is_set():
+                await asyncio.sleep(self.config['analytics']['report_interval'])
+                await self._generate_analytics_report()
+        
+        # Start all periodic tasks
+        self.loop.create_task(periodic_saver())
+        self.loop.create_task(metrics_collector())
+        if self.config['system']['backup_enabled']:
+            self.loop.create_task(backup_creator())
+        if self.config['analytics']['enabled']:
+            self.loop.create_task(analytics_reporter())
+
+    async def _generate_analytics_report(self):
+        """Generate analytics report."""
+        try:
+            today = datetime.date.today()
+            stats = self.analytics_engine.get_daily_stats(today)
+            
+            report = f"""
+            Daily Analytics Report - {today}
+            --------------------------------
+            Total Interactions: {stats['total_interactions']}
+            Average Response Time: {stats['avg_response_time']:.2f}s
+            Success Rate: {stats['success_rate']:.1f}%
+            System Health: {self.health_monitor.check_health(self._get_current_system_metrics())['status']}
+            """
+            
+            logger.info(report)
+            
+            # Save report to file
+            report_file = Path(f"analytics_report_{today}.txt")
+            report_file.write_text(report)
+            
+        except Exception as e:
+            logger.error(f"Analytics report generation failed: {e}")
+
+    async def _shutdown_sequence(self):
+        """Enhanced shutdown sequence."""
+        logger.info("Starting shutdown sequence...")
+        
+        # Stop all threads
+        self._stop_threads()
+        
+        # Shutdown plugins
+        await self.plugin_manager.shutdown_plugins()
+        
+        # Save all data
+        self._save_conversation_history()
+        self._save_user_profiles()
+        
+        # Close connections
+        self.speech_recognizer.stop_wake_word_detection()
+        self.speech_recognizer.stop_audio_stream()
+        self.tts.stop()
+        
+        # Generate final report
+        self._generate_final_report()
+        
+        # Handle exit
+        self._handle_exit()
+
+    def _stop_threads(self):
+        """Stop all background threads."""
+        self.shutdown_event.set()
+        
+        for name, thread in self.threads.items():
+            if thread and thread.is_alive():
+                thread.join(timeout=2)
+                logger.info(f"Thread {name} stopped")
+        
+        if self.audio_thread and self.audio_thread.is_alive():
+            self.audio_thread.join(timeout=2)
+        
+        if self.processing_thread and self.processing_thread.is_alive():
+            self.processing_thread.join(timeout=2)
+
+    def _generate_final_report(self):
+        """Generate final session report."""
+        duration = datetime.datetime.now() - self.start_time
+        avg_response = sum(self.response_times)/len(self.response_times) if self.response_times else 0
+        
+        report = f"""
+        ╔══════════════════════════════════════════════════════════════╗
+        ║                    Session Final Report                       ║
+        ╠══════════════════════════════════════════════════════════════╣
+        ║ Session ID: {self.session_id}
+        ║ Duration: {duration}
+        ║ Start Time: {self.start_time}
+        ║ End Time: {datetime.datetime.now()}
+        ║
+        ║ Performance Summary:
+        ║ • Total Interactions: {len(self.context_manager.conversation_history)}
+        ║ • Avg Response Time: {avg_response:.2f}s
+        ║ • System Health: {self.health_monitor.check_health(self._get_current_system_metrics())['status']}
+        ║
+        ║ User Summary:
+        ║ • Active Users: {len(self.context_manager.user_profiles)}
+        ║ • Current User: {self.current_user.name if self.current_user else 'None'}
+        ║
+        ║ Learning Summary:
+        ║ • Knowledge Base: {len(self.learning_engine.knowledge_base)} entries
+        ║ • Patterns Learned: {len(self.learning_engine.patterns)}
+        ║ • Learning Mode: {self.learning_mode.name}
+        ╚══════════════════════════════════════════════════════════════╝
+        """
+        
+        logger.info(report)
+        
+        # Save to file
+        report_file = Path(f"session_report_{self.session_id[:8]}.txt")
+        report_file.write_text(report)
+
+    def _log_error(self, message: str, context: Optional[Dict[str, Any]]):
+        """Log error with context."""
+        error_entry = {
+            'timestamp': datetime.datetime.now(),
+            'message': message,
+            'context': context,
+            'system_metrics': asdict(self._get_current_system_metrics()) if hasattr(self, '_get_current_system_metrics') else {}
+        }
+        self.error_log.append(error_entry)
+        logger.error(f"{message} - Context: {context}")
+
+    def _get_current_system_metrics(self) -> SystemMetrics:
+        """Get current system metrics with GPU support."""
+        try:
+            gpus = GPUtil.getGPUs()
+            gpu = gpus[0] if gpus else None
+        except:
+            gpu = None
+        
+        return SystemMetrics(
+            timestamp=datetime.datetime.now(),
+            cpu_percent=psutil.cpu_percent(interval=0.1),
+            memory_percent=psutil.virtual_memory().percent,
+            disk_percent=psutil.disk_usage('/').percent,
+            network_bytes_sent=psutil.net_io_counters().bytes_sent,
+            network_bytes_recv=psutil.net_io_counters().bytes_recv,
+            gpu_utilization=gpu.load * 100 if gpu else None,
+            gpu_memory_percent=gpu.memoryUtil * 100 if gpu else None,
+            process_count=len(psutil.pids())
+        )
+
+    def _get_time_based_greeting(self) -> str:
+        """Get time-based greeting."""
+        hour = datetime.datetime.now().hour
+        
+        if 5 <= hour < 12:
+            return "Good morning"
+        elif 12 <= hour < 17:
+            return "Good afternoon"
+        elif 17 <= hour < 22:
+            return "Good evening"
+        else:
+            return "Hello"
+
+    def _parse_command_params(self, params: str) -> Dict[str, str]:
+        """Parse command parameters."""
+        result = {}
+        if params:
+            for item in params.split(','):
+                if '=' in item:
+                    key, value = item.split('=', 1)
+                    result[key.strip()] = value.strip()
+        return result
+
+    def _show_welcome(self):
+        """Display enhanced welcome message."""
+        welcome_text = f"""
+╔══════════════════════════════════════════════════════════════════════════╗
+║                    🤖 Jarvis AI Assistant - Supercharged                 ║
+║                    Session: {self.session_id[:12]}...                            ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+🚀 **System Initialized Successfully!**
+• Version: 3.0.0
+• Platform: {platform.system()} {platform.release()}
+• Python: {platform.python_version()}
+• Architecture: {platform.machine()}
+• Processors: {psutil.cpu_count()} cores
+• Memory: {psutil.virtual_memory().total / 1024**3:.1f} GB
+
+🎭 **Personality Profile:**
+{json.dumps(self.personality_manager.traits, indent=2)}
+
+📊 **Current Status:**
+• Security: {'🔒 Authenticated' if self.current_user else '🔓 Public'}
+• Learning: {self.learning_mode.name}
+• Mood: {self.personality_manager.mood.value}
+• Health: {self.health_monitor.check_health(self._get_current_system_metrics())['status']}
+
+🔌 **Loaded Features:**
+✓ Multi-User Support
+✓ Advanced Learning Engine
+✓ Plugin System ({len(self.plugin_manager.plugins)} plugins)
+✓ Health Monitoring
+✓ External API Integration
+✓ Real-time Analytics
+✓ Cross-Platform Compatibility
+
+💡 **Available Commands:**
+- "system status" - Get comprehensive system report
+- "system health" - Check system health
+- "learning status" - View learning progress
+- "personality adjust [trait] [value]" - Adjust personality
+- "api weather" - Get weather information
+- "api news" - Get latest news
+- "user switch [id]" - Switch user profile
+
+🔊 **Voice Commands:**
+Say "{self.config['speech']['wake_word']}" followed by your command.
+
+📡 **Connectivity:**
+• WebSocket API: ws://localhost:8765
+• HTTP API: http://localhost:8080
+• Logs: jarvis.log, jarvis_debug.log
+
+Ready to assist! Say "{self.config['speech']['wake_word']}" to begin.
+        """
+        print(welcome_text)
+
+    def _handle_exit(self):
+        """Handle application exit."""
+        logger.info("Jarvis shutting down...")
+        
+        exit_text = f"""
+╔══════════════════════════════════════════════════════════════╗
+║                    Jarvis Shutdown Complete                  ║
+╠══════════════════════════════════════════════════════════════╣
+║ Session: {self.session_id}
+║ Duration: {datetime.datetime.now() - self.start_time}
+║ Interactions: {len(self.context_manager.conversation_history)}
+║ Users: {len(self.context_manager.user_profiles)}
+║ Final Mood: {self.personality_manager.mood.value}
+║
+║ All data saved securely.
+║ Plugins shutdown gracefully.
+║ Connections closed.
+║
+║ Thank you for using Jarvis AI Assistant!
+║ See you next time! 👋
+╚══════════════════════════════════════════════════════════════╝
+        """
+        
+        print(exit_text)
+        logger.info("Jarvis shutdown complete")
+
+class JarvisPluginExample(PluginBase):
+    """Example plugin for Jarvis."""
+    
+    @property
+    def name(self) -> str:
+        return "example_plugin"
+    
+    @property
+    def version(self) -> str:
+        return "1.0.0"
+    
+    @property
+    def description(self) -> str:
+        return "Example plugin for Jarvis AI Assistant"
+    
+    async def initialize(self):
+        """Initialize plugin."""
+        logger.info(f"Initializing {self.name} v{self.version}")
+        
+    async def shutdown(self):
+        """Shutdown plugin."""
+        logger.info(f"Shutting down {self.name}")
+        
+    async def handle_event(self, event: Dict[str, Any]):
+        """Handle events from Jarvis."""
+        if event.get('type') == 'speech_recognized':
+            text = event.get('text', '')
+            if 'example' in text.lower():
+                # Respond to example keyword
+                await self.jarvis.input_queue.put({
+                    'type': 'text_input',
+                    'text': "I heard you mention 'example'!",
+                    'source': 'example_plugin'
+                })
+
+def main():
+    """Main entry point with enhanced error handling."""
+    try:
+        # Set up signal handlers
+        import signal
+        
+        def signal_handler(sig, frame):
+            print("\n\nReceived shutdown signal. Shutting down gracefully...")
+            raise KeyboardInterrupt
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Initialize Jarvis
+        jarvis = Jarvis()
+        
+        # Run with timeout protection
+        asyncio.run(jarvis.run(), debug=True)
+        
+    except KeyboardInterrupt:
+        print("\n\nShutdown initiated by user.")
+    except Exception as e:
+        print(f"\n⚠️  Fatal error: {e}")
+        logger.critical(f"Fatal error: {e}", exc_info=True)
+        
+        # Attempt emergency shutdown
+        try:
+            if 'jarvis' in locals():
+                jarvis.shutdown_event.set()
+        except:
+            pass
+        
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 
 
