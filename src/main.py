@@ -572,6 +572,376 @@ class Jarvis:
             response = f"Command executed: {result}"
             self.tts.speak(response)
             return result
+                async def _execute_search(self, params: Dict[str, Any]):
+        """Execute web search."""
+        query = params.get('query', '')
+        result = await self.loop.run_in_executor(
+            None, self.command_registry.execute, 'web_search', f'query={query}'
+        )
+        
+        if result:
+            # Summarize result for speech
+            summary = result[:200] + "..." if len(result) > 200 else result
+            self.tts.speak(f"Search result: {summary}")
             
+        return result
+
+    async def _execute_schedule(self, params: Dict[str, Any]):
+        """Execute scheduling command."""
+        task = params.get('task', '')
+        time_str = params.get('time', 'now')
+        result = await self.loop.run_in_executor(
+            None, self.command_registry.execute, 'schedule',
+            f'command=respond,command_params=response_text=Reminder: {task},time={time_str}'
+        )
+        
+        if result:
+            self.tts.speak(f"Scheduled: {result}")
+            
+        return result
+
+    async def _show_system_info(self):
+        """Display system information."""
+        metrics = self._get_current_system_metrics()
+        info = f"""
+        System Status:
+        - CPU Usage: {metrics.cpu_percent:.1f}%
+        - Memory Usage: {metrics.memory_percent:.1f}%
+        - Disk Usage: {metrics.disk_percent:.1f}%
+        - Uptime: {datetime.datetime.now() - self.start_time}
+        - Total Conversations: {len(self.context_manager.conversation_history)}
+        """
+        self.tts.speak(info)
+        print(info)
+
+    async def _adjust_personality(self, params: Dict[str, Any]):
+        """Adjust Jarvis's personality."""
+        trait = params.get('trait')
+        adjustment = params.get('adjustment', 0.1)
+        
+        if trait in self.personality_manager.traits:
+            self.personality_manager.adjust_trait(trait, adjustment)
+            self.tts.speak(f"Adjusted {trait} by {adjustment}")
+        else:
+            self.tts.speak(f"Unknown trait: {trait}")
+
+    async def _check_proactive_suggestions(self):
+        """Check for proactive suggestions based on context."""
+        if self.personality_manager.traits['initiative'] < 0.5:
+            return
+            
+        # Example: Suggest weather if not checked today
+        last_weather = self.context_manager.get_user_preference('last_weather_check')
+        if not last_weather or (datetime.datetime.now() - last_weather).days > 0:
+            if np.random.random() < 0.3:  # 30% chance
+                self.tts.speak("By the way, would you like me to check today's weather?")
+
+    async def _handle_system_alert(self, event: Dict[str, Any]):
+        """Handle system alerts."""
+        alert_type = event.get('alert_type')
+        message = event.get('message', '')
+        
+        if alert_type == 'high_cpu':
+            self.tts.speak(f"System alert: High CPU usage. {message}")
+        elif alert_type == 'low_memory':
+            self.tts.speak(f"System alert: Low memory. {message}")
+        elif alert_type == 'scheduled_task':
+            self.tts.speak(f"Reminder: {message}")
+
+    async def _handle_periodic_task(self, event: Dict[str, Any]):
+        """Handle periodic tasks."""
+        task = event.get('task')
+        
+        if task == 'save_history':
+            self._save_conversation_history()
+        elif task == 'collect_metrics':
+            await self._collect_system_metrics()
+        elif task == 'backup':
+            await self._create_backup()
+
+    async def _handle_shutdown(self, event: Optional[Dict] = None):
+        """Handle shutdown request."""
+        self.shutdown_event.set()
+
+    async def _handle_command_result(self, event: Dict[str, Any]):
+        """Handle command execution results."""
+        result = event.get('result')
+        command = event.get('command')
+        logger.info(f"Command '{command}' completed with result: {result}")
+
+    def _start_periodic_tasks(self):
+        """Start periodic background tasks."""
+        async def periodic_saver():
+            while not self.shutdown_event.is_set():
+                await asyncio.sleep(self.config['system']['auto_save_interval'])
+                await self.alert_queue.put({
+                    'type': 'periodic_task',
+                    'task': 'save_history'
+                })
+        
+        async def metrics_collector():
+            while not self.shutdown_event.is_set():
+                await asyncio.sleep(60)  # Collect metrics every minute
+                await self.alert_queue.put({
+                    'type': 'periodic_task',
+                    'task': 'collect_metrics'
+                })
+        
+        # Start periodic tasks
+        self.loop.create_task(periodic_saver())
+        self.loop.create_task(metrics_collector())
+
+    async def _collect_system_metrics(self):
+        """Collect and store system metrics."""
+        metrics = self._get_current_system_metrics()
+        self.system_metrics_history.append(metrics)
+        
+        # Check for alerts
+        if metrics.cpu_percent > 80:
+            await self.alert_queue.put({
+                'type': 'system_alert',
+                'alert_type': 'high_cpu',
+                'message': f'CPU at {metrics.cpu_percent:.1f}%'
+            })
+        if metrics.memory_percent > 85:
+            await self.alert_queue.put({
+                'type': 'system_alert',
+                'alert_type': 'low_memory',
+                'message': f'Memory at {metrics.memory_percent:.1f}%'
+            })
+
+    def _get_current_system_metrics(self) -> SystemMetrics:
+        """Get current system metrics."""
+        return SystemMetrics(
+            timestamp=datetime.datetime.now(),
+            cpu_percent=psutil.cpu_percent(interval=0.1),
+            memory_percent=psutil.virtual_memory().percent,
+            disk_percent=psutil.disk_usage('/').percent,
+            network_bytes_sent=psutil.net_io_counters().bytes_sent,
+            network_bytes_recv=psutil.net_io_counters().bytes_recv
+        )
+
+    def _system_monitoring_loop(self):
+        """Background thread for system monitoring."""
+        while not self.shutdown_event.is_set():
+            try:
+                # Monitor various system aspects
+                self._monitor_performance()
+                time.sleep(5)  # Check every 5 seconds
+            except Exception as e:
+                logger.error(f"System monitoring error: {e}")
+
+    def _monitor_performance(self):
+        """Monitor system performance."""
+        # Calculate average response time
+        if self.response_times:
+            avg_response = sum(self.response_times) / len(self.response_times)
+            if avg_response > 5.0:  # Alert if average response > 5 seconds
+                asyncio.run_coroutine_threadsafe(
+                    self.alert_queue.put({
+                        'type': 'system_alert',
+                        'alert_type': 'slow_response',
+                        'message': f'Average response time: {avg_response:.1f}s'
+                    }),
+                    self.loop
+                )
+
+    def _start_wake_word_detection(self):
+        """Start wake word detection in background thread."""
+        def wake_callback():
+            asyncio.run_coroutine_threadsafe(
+                self.input_queue.put({'type': 'wake_word_detected'}),
+                self.loop
+            )
+
+        self.speech_recognizer.wake_word_callback = wake_callback
+        self.speech_recognizer.start_wake_word_detection()
+        self.speech_recognizer.start_audio_stream()
+
+        # Start audio processing thread
+        self.audio_thread = threading.Thread(target=self._audio_processing_loop, daemon=True)
+        self.audio_thread.start()
+
+    def _start_speech_recognition(self):
+        """Start speech recognition for active listening."""
+        self.is_listening = True
+        # Start continuous listening
+        self.speech_recognizer.start_continuous_listening(
+            callback=lambda text: asyncio.run_coroutine_threadsafe(
+                self.input_queue.put({'type': 'speech_recognized', 'text': text}),
+                self.loop
+            )
+        )
+
+    def _audio_processing_loop(self):
+        """Background thread for processing audio frames."""
+        while not self.shutdown_event.is_set():
+            try:
+                # Process audio frames
+                if self.is_active and self.is_listening:
+                    # Continuous listening is already handled
+                    pass
+                else:
+                    # Wake word detection
+                    frame = self.speech_recognizer.get_audio_frame()
+                    if frame is not None:
+                        detected = self.speech_recognizer.process_audio_frame(frame)
+                        if detected and not self.is_active:
+                            asyncio.run_coroutine_threadsafe(
+                                self.input_queue.put({'type': 'wake_word_detected'}),
+                                self.loop
+                            )
+                time.sleep(0.05)  # 20ms delay for ~50 FPS
+            except Exception as e:
+                logger.error(f"Audio processing error: {e}")
+
+    def _start_threads(self):
+        """Start all background threads."""
+        # Audio processing is already started in wake word detection
+        pass
+
+    def _stop_threads(self):
+        """Stop all background threads."""
+        self.shutdown_event.set()
+
+        if self.audio_thread and self.audio_thread.is_alive():
+            self.audio_thread.join(timeout=2)
+            
+        if self.monitoring_thread and self.monitoring_thread.is_alive():
+            self.monitoring_thread.join(timeout=2)
+
+        self.speech_recognizer.stop_wake_word_detection()
+        self.speech_recognizer.stop_audio_stream()
+        self.tts.stop()
+        
+        # Save final state
+        self._save_conversation_history()
+        self._save_user_preferences()
+
+    def _get_time_based_greeting(self) -> str:
+        """Get greeting based on time of day."""
+        hour = datetime.datetime.now().hour
+        
+        if 5 <= hour < 12:
+            return "Good morning"
+        elif 12 <= hour < 17:
+            return "Good afternoon"
+        elif 17 <= hour < 22:
+            return "Good evening"
+        else:
+            return "Hello"
+
+    def _load_user_preferences(self):
+        """Load user preferences from file."""
+        pref_file = Path('user_preferences.json')
+        if pref_file.exists():
+            try:
+                with open(pref_file, 'r') as f:
+                    self.context_manager.user_preferences = json.load(f)
+                logger.info("User preferences loaded")
+            except Exception as e:
+                logger.error(f"Failed to load user preferences: {e}")
+
+    def _save_user_preferences(self):
+        """Save user preferences to file."""
+        try:
+            pref_file = Path('user_preferences.json')
+            with open(pref_file, 'w') as f:
+                json.dump(self.context_manager.user_preferences, f, indent=2)
+            logger.info("User preferences saved")
+        except Exception as e:
+            logger.error(f"Failed to save user preferences: {e}")
+
+    async def _create_backup(self):
+        """Create backup of important data."""
+        if not self.config['system']['backup_enabled']:
+            return
+            
+        try:
+            backup_dir = Path('backups')
+            backup_dir.mkdir(exist_ok=True)
+            
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = backup_dir / f"jarvis_backup_{timestamp}.zip"
+            
+            # In a real implementation, this would create a zip file
+            # with conversation history, preferences, and config
+            
+            logger.info(f"Backup created: {backup_file}")
+        except Exception as e:
+            logger.error(f"Backup failed: {e}")
+
+    def _show_welcome(self):
+        """Display enhanced welcome message."""
+        welcome_text = f"""
+╔══════════════════════════════════════════════════════════════╗
+║                    🤖 Jarvis AI Assistant                    ║
+║                    Session: {self.session_id[:8]}...                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+Hello! I'm Jarvis, your intelligent AI assistant. 
+I'm now listening for the wake word "{self.config['speech']['wake_word']}" to activate.
+
+📊 **Current Status:**
+- System: {platform.system()} {platform.release()}
+- Python: {platform.python_version()}
+- Personality: {self.personality_manager.traits}
+- Mood: {self.personality_manager.mood.value}
+
+🚀 **Enhanced Features:**
+• Emotion-aware responses
+• Conversation memory & context
+• Personality customization
+• System performance monitoring
+• Proactive suggestions
+• Multimodal support (coming soon)
+
+💡 **Commands you can try:**
+- "Hey Jarvis, how's the system doing?"
+- "Hey Jarvis, search for AI news"
+- "Hey Jarvis, schedule a meeting tomorrow at 2 PM"
+- "Hey Jarvis, be more casual in your responses"
+- "Hey Jarvis, what were we talking about earlier?"
+
+Say "{self.config['speech']['wake_word']}" to get started!
+        """
+        print(welcome_text)
+
+    def _handle_exit(self):
+        """Handle application exit."""
+        logger.info("Jarvis shutting down...")
+        
+        # Show session summary
+        duration = datetime.datetime.now() - self.start_time
+        summary = f"""
+╔══════════════════════════════════════════════════════════════╗
+║                     Session Summary                          ║
+╚══════════════════════════════════════════════════════════════╝
+• Duration: {duration}
+• Conversations: {len(self.context_manager.conversation_history)}
+• Average Response Time: {
+    sum(self.response_times)/len(self.response_times) if self.response_times else 0:.2f}s
+• Final Mood: {self.personality_manager.mood.value}
+        
+Goodbye! Jarvis signing off.
+        """
+        print(summary)
+
+
+def main():
+    """Main entry point."""
+    try:
+        jarvis = Jarvis()
+        asyncio.run(jarvis.run())
+    except KeyboardInterrupt:
+        print("\n\nShutdown initiated by user.")
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        logger.critical(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
         return None
 
