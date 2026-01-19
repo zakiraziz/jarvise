@@ -718,4 +718,376 @@ class PluginManager:
                     logger.info(f"Initialized plugin: {plugin.name}")
                 except Exception as e:
                     logger.error(f"Failed to initialize plugin {plugin.name}: {e}")
+        async def shutdown_plugins(self):
+        """Shutdown all plugins."""
+        for plugin in self.plugins.values():
+            if plugin.enabled:
+                try:
+                    await plugin.shutdown()
+                except Exception as e:
+                    logger.error(f"Failed to shutdown plugin {plugin.name}: {e}")
     
+    async def broadcast_event(self, event: Dict[str, Any]):
+        """Broadcast event to all plugins."""
+        for plugin in self.plugins.values():
+            if plugin.enabled:
+                try:
+                    await plugin.handle_event(event)
+                except Exception as e:
+                    logger.error(f"Plugin {plugin.name} failed to handle event: {e}")
+
+class ExternalAPIHandler:
+    """Handle external API integrations."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.apis = self._initialize_apis()
+        self.api_cache = {}
+        self.cache_timeout = 300  # 5 minutes
+        
+    def _initialize_apis(self) -> Dict[str, Any]:
+        """Initialize API connections."""
+        apis = {}
+        
+        # Weather API
+        if weather_key := self.config.get('weather_api_key'):
+            apis['weather'] = {
+                'key': weather_key,
+                'base_url': 'https://api.openweathermap.org/data/2.5'
+            }
+        
+        # News API
+        if news_key := self.config.get('news_api_key'):
+            apis['news'] = {
+                'key': news_key,
+                'base_url': 'https://newsapi.org/v2'
+            }
+        
+        # Calendar API
+        if calendar_config := self.config.get('calendar'):
+            apis['calendar'] = calendar_config
+        
+        return apis
+    
+    async def call_api(self, api_name: str, endpoint: str, 
+                      params: Optional[Dict] = None) -> Dict[str, Any]:
+        """Call external API."""
+        cache_key = f"{api_name}:{endpoint}:{json.dumps(params or {})}"
+        
+        # Check cache
+        if cache_key in self.api_cache:
+            cached_data, timestamp = self.api_cache[cache_key]
+            if time.time() - timestamp < self.cache_timeout:
+                return cached_data
+        
+        if api_name not in self.apis:
+            return {"error": f"API {api_name} not configured"}
+        
+        api_config = self.apis[api_name]
+        url = f"{api_config['base_url']}/{endpoint}"
+        
+        try:
+            response = requests.get(
+                url,
+                params={**params, 'api_key': api_config.get('key')},
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Cache the result
+            self.api_cache[cache_key] = (data, time.time())
+            
+            return data
+        except Exception as e:
+            logger.error(f"API call failed: {api_name}/{endpoint}: {e}")
+            return {"error": str(e)}
+
+class Jarvis:
+    """Supercharged Jarvis AI Assistant."""
+
+    def __init__(self, config_path: Optional[Path] = None):
+        self.config = self._load_config(config_path)
+        self._setup_components()
+
+        # Core system state
+        self.is_active = False
+        self.is_listening = False
+        self.session_id = str(uuid.uuid4())
+        self.start_time = datetime.datetime.now()
+        self.current_user: Optional[UserProfile] = None
+        self.learning_mode = LearningMode.ADAPTIVE
+        
+        # Enhanced components
+        self.multimodal_processor = MultiModalProcessor()
+        self.personality_manager = PersonalityManager()
+        self.context_manager = ContextManager()
+        self.learning_engine = LearningEngine()
+        self.security_manager = SecurityManager(self.config.get('security', {}).get('secret_key'))
+        self.health_monitor = HealthMonitor()
+        self.analytics_engine = AnalyticsEngine()
+        self.plugin_manager = PluginManager(self)
+        self.external_api_handler = ExternalAPIHandler(self.config.get('apis', {}))
+        
+        # Performance monitoring
+        self.system_metrics_history = deque(maxlen=1000)
+        self.response_times = deque(maxlen=1000)
+        self.error_log = deque(maxlen=500)
+        
+        # Asyncio event loop
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
+        # Enhanced event queues
+        self.input_queue = asyncio.Queue(maxsize=1000)
+        self.decision_queue = asyncio.Queue(maxsize=1000)
+        self.action_queue = asyncio.Queue(maxsize=1000)
+        self.alert_queue = asyncio.Queue(maxsize=1000)
+        self.plugin_queue = asyncio.Queue(maxsize=1000)
+        
+        # Thread management
+        self.threads = {}
+        self.shutdown_event = threading.Event()
+        
+        # Initialize enhanced systems
+        self._init_enhanced_systems()
+
+    def _load_config(self, config_path: Optional[Path]) -> dict:
+        """Load configuration from YAML file."""
+        if config_path is None:
+            config_path = Path(__file__).parent.parent / 'config' / 'config.yaml'
+
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            logger.info(f"Configuration loaded from {config_path}")
+            
+            # Enhanced environment variable handling
+            self._process_config_env_vars(config)
+            
+            # Validate configuration
+            self._validate_config(config)
+            
+            return config
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            return self._get_default_config()
+
+    def _process_config_env_vars(self, config: dict):
+        """Process environment variables in config."""
+        for section, values in config.items():
+            if isinstance(values, dict):
+                for key, value in values.items():
+                    if isinstance(value, str) and value.startswith("env:"):
+                        env_var = value[4:]
+                        config[section][key] = os.getenv(env_var, "")
+                    elif isinstance(value, dict):
+                        self._process_config_env_vars({key: value})
+
+    def _validate_config(self, config: dict):
+        """Validate configuration."""
+        required_sections = ['openai', 'speech', 'tts']
+        for section in required_sections:
+            if section not in config:
+                logger.warning(f"Missing configuration section: {section}")
+        
+        # Validate API keys
+        if not config.get('openai', {}).get('api_key'):
+            logger.error("OpenAI API key not configured")
+        
+        if not config.get('speech', {}).get('picovoice_key'):
+            logger.warning("Picovoice API key not configured - wake word detection may not work")
+
+    def _get_default_config(self) -> dict:
+        """Get comprehensive default configuration."""
+        return {
+            'openai': {
+                'api_key': os.getenv('OPENAI_API_KEY', ''),
+                'model': 'gpt-4-turbo-preview',
+                'temperature': 0.7,
+                'max_tokens': 2000,
+                'timeout': 30,
+                'max_retries': 3
+            },
+            'speech': {
+                'picovoice_key': os.getenv('PICOVOICE_KEY', ''),
+                'wake_word_sensitivity': 0.5,
+                'wake_word': 'jarvis',
+                'language': 'en-US',
+                'energy_threshold': 300,
+                'pause_threshold': 0.8
+            },
+            'tts': {
+                'voice_id': 0,
+                'rate': 200,
+                'volume': 1.0,
+                'pitch': 100,
+                'engine': 'pyttsx3'
+            },
+            'commands': {
+                'smart_home': {
+                    'api_url': 'https://api.smarthome.com',
+                    'api_key': os.getenv('SMART_HOME_API_KEY', '')
+                },
+                'automation': {
+                    'scripts_dir': 'scripts',
+                    'timeout': 30
+                }
+            },
+            'system': {
+                'max_conversation_history': 100,
+                'auto_save_interval': 300,
+                'performance_monitoring': True,
+                'backup_enabled': True,
+                'health_check_interval': 60,
+                'max_response_time': 10.0,
+                'resource_limits': {
+                    'max_cpu_percent': 80,
+                    'max_memory_percent': 85,
+                    'max_disk_percent': 90
+                }
+            },
+            'security': {
+                'secret_key': os.getenv('JARVIS_SECRET_KEY', secrets.token_hex(32)),
+                'require_authentication': False,
+                'session_timeout': 3600,
+                'encryption_enabled': True
+            },
+            'apis': {
+                'weather_api_key': os.getenv('WEATHER_API_KEY', ''),
+                'news_api_key': os.getenv('NEWS_API_KEY', ''),
+                'calendar': {
+                    'type': 'google',
+                    'credentials_file': 'credentials.json'
+                }
+            },
+            'plugins': {
+                'enabled_by_default': True,
+                'auto_discover': True,
+                'plugin_dirs': ['plugins']
+            },
+            'learning': {
+                'enabled': True,
+                'mode': 'adaptive',
+                'retention_days': 30,
+                'adaptive_threshold': 0.7
+            },
+            'analytics': {
+                'enabled': True,
+                'collect_usage_stats': True,
+                'anonymize_data': True,
+                'report_interval': 86400
+            }
+        }
+
+    def _setup_components(self):
+        """Initialize all Jarvis components with enhanced error handling."""
+        try:
+            # Voice interface
+            self.speech_recognizer = SpeechRecognizer(
+                access_key=self.config['speech']['picovoice_key'],
+                sensitivity=self.config['speech']['wake_word_sensitivity'],
+                keywords=[self.config['speech']['wake_word']]
+            )
+            
+            self.tts = TextToSpeech(
+                voice_id=self.config['tts']['voice_id'],
+                rate=self.config['tts']['rate'],
+                volume=self.config['tts']['volume'],
+                pitch=self.config['tts']['pitch']
+            )
+
+            # AI/LLM with retry logic
+            self.ai = AIAssistant(
+                api_key=self.config['openai']['api_key'],
+                model=self.config['openai']['model'],
+                temperature=self.config['openai']['temperature'],
+                max_tokens=self.config['openai']['max_tokens'],
+                timeout=self.config['openai']['timeout'],
+                max_retries=self.config['openai']['max_retries']
+            )
+
+            # Enhanced command system
+            self.command_registry = CommandRegistry()
+            self._register_commands()
+            
+            # Load conversation history
+            self._load_conversation_history()
+            
+            # Load user profiles
+            self._load_user_profiles()
+            
+            logger.info("All components initialized successfully")
+            
+        except Exception as e:
+            logger.critical(f"Failed to initialize components: {e}")
+            raise
+
+    def _init_enhanced_systems(self):
+        """Initialize enhanced systems."""
+        # Start system monitoring
+        if self.config['system']['performance_monitoring']:
+            self._start_system_monitoring()
+        
+        # Start health monitoring
+        self._start_health_monitoring()
+        
+        # Initialize plugins
+        if self.config['plugins']['enabled_by_default']:
+            asyncio.run_coroutine_threadsafe(
+                self._initialize_plugins(),
+                self.loop
+            )
+
+    async def _initialize_plugins(self):
+        """Initialize plugin system."""
+        try:
+            await self.plugin_manager.discover_plugins()
+            await self.plugin_manager.initialize_plugins()
+            logger.info(f"Loaded {len(self.plugin_manager.plugins)} plugins")
+        except Exception as e:
+            logger.error(f"Failed to initialize plugins: {e}")
+
+    def _register_commands(self):
+        """Register available commands."""
+        # Core commands
+        self.command_registry.register(WebSearchCommand())
+        self.command_registry.register(AutomationCommand())
+        self.command_registry.register(SmartHomeCommand(
+            api_url=self.config['commands']['smart_home']['api_url'],
+            api_key=self.config['commands']['smart_home']['api_key']
+        ))
+        self.command_registry.register(ScheduleCommand(self.command_registry))
+        
+        # Register system commands
+        self.command_registry.register(self._create_system_command())
+        
+        # Register learning commands
+        self.command_registry.register(self._create_learning_command())
+
+    def _create_system_command(self):
+        """Create system command handler."""
+        class SystemCommand:
+            def __init__(self, jarvis):
+                self.jarvis = jarvis
+                self.name = "system"
+                
+            async def execute(self, params: str) -> str:
+                """Execute system command."""
+                param_dict = self.jarvis._parse_command_params(params)
+                action = param_dict.get('action', 'status')
+                
+                if action == 'status':
+                    return self.jarvis._get_system_status()
+                elif action == 'health':
+                    return self.jarvis._get_health_report()
+                elif action == 'metrics':
+                    return self.jarvis._get_metrics_summary()
+                elif action == 'restart':
+                    return await self.jarvis._restart_system()
+                elif action == 'update':
+                    return await self.jarvis._check_for_updates()
+                else:
+                    return f"Unknown system action: {action}"
+        
+
