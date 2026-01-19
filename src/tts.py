@@ -1089,5 +1089,302 @@ class Jarvis:
                     return await self.jarvis._check_for_updates()
                 else:
                     return f"Unknown system action: {action}"
+                return SystemCommand(self)
+
+    def _create_learning_command(self):
+        """Create learning command handler."""
+        class LearningCommand:
+            def __init__(self, jarvis):
+                self.jarvis = jarvis
+                self.name = "learning"
+                
+            async def execute(self, params: str) -> str:
+                """Execute learning command."""
+                param_dict = self.jarvis._parse_command_params(params)
+                action = param_dict.get('action', 'status')
+                
+                if action == 'status':
+                    return f"Learning mode: {self.jarvis.learning_mode.name}\nKnowledge base: {len(self.jarvis.learning_engine.knowledge_base)} entries"
+                elif action == 'enable':
+                    self.jarvis.learning_mode = LearningMode.ADAPTIVE
+                    return "Learning enabled in adaptive mode"
+                elif action == 'disable':
+                    self.jarvis.learning_mode = LearningMode.PASSIVE
+                    return "Learning disabled"
+                elif action == 'clear':
+                    self.jarvis.learning_engine = LearningEngine()
+                    return "Learning data cleared"
+                else:
+                    return f"Unknown learning action: {action}"
         
+        return LearningCommand(self)
+
+    def _load_conversation_history(self):
+        """Load conversation history from encrypted file."""
+        history_file = Path('conversation_history.enc')
+        if history_file.exists():
+            try:
+                encrypted_data = history_file.read_bytes()
+                decrypted_data = self.security_manager.decrypt(encrypted_data.decode())
+                history = pickle.loads(decrypted_data.encode())
+                
+                for entry in history:
+                    self.context_manager.add_conversation_entry(entry)
+                
+                logger.info(f"Loaded {len(history)} encrypted conversation entries")
+            except Exception as e:
+                logger.error(f"Failed to load encrypted conversation history: {e}")
+
+    def _save_conversation_history(self):
+        """Save conversation history to encrypted file."""
+        try:
+            history = list(self.context_manager.conversation_history)
+            serialized_data = pickle.dumps(history)
+            encrypted_data = self.security_manager.encrypt(serialized_data.decode())
+            
+            history_file = Path('conversation_history.enc')
+            history_file.write_bytes(encrypted_data.encode())
+            
+            logger.info("Conversation history saved securely")
+        except Exception as e:
+            logger.error(f"Failed to save conversation history: {e}")
+
+    def _load_user_profiles(self):
+        """Load user profiles from database."""
+        profiles_file = Path('user_profiles.db')
+        if profiles_file.exists():
+            try:
+                conn = sqlite3.connect(profiles_file)
+                cursor = conn.cursor()
+                
+                cursor.execute('SELECT * FROM user_profiles')
+                rows = cursor.fetchall()
+                
+                for row in rows:
+                    profile = UserProfile(
+                        user_id=row[0],
+                        name=row[1],
+                        voice_profile=json.loads(row[2]),
+                        preferences=json.loads(row[3]),
+                        permissions=set(json.loads(row[4])),
+                        learning_data=json.loads(row[5]),
+                        last_active=datetime.datetime.fromisoformat(row[6]),
+                        security_level=SecurityLevel(row[7])
+                    )
+                    self.context_manager.user_profiles[profile.user_id] = profile
+                
+                conn.close()
+                logger.info(f"Loaded {len(rows)} user profiles")
+            except Exception as e:
+                logger.error(f"Failed to load user profiles: {e}")
+
+    def _save_user_profiles(self):
+        """Save user profiles to database."""
+        try:
+            profiles_file = Path('user_profiles.db')
+            conn = sqlite3.connect(profiles_file)
+            cursor = conn.cursor()
+            
+            # Create table if not exists
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id TEXT PRIMARY KEY,
+                name TEXT,
+                voice_profile TEXT,
+                preferences TEXT,
+                permissions TEXT,
+                learning_data TEXT,
+                last_active TEXT,
+                security_level INTEGER
+            )
+            ''')
+            
+            # Clear existing data
+            cursor.execute('DELETE FROM user_profiles')
+            
+            # Insert current profiles
+            for profile in self.context_manager.user_profiles.values():
+                cursor.execute('''
+                INSERT INTO user_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    profile.user_id,
+                    profile.name,
+                    json.dumps(profile.voice_profile),
+                    json.dumps(profile.preferences),
+                    json.dumps(list(profile.permissions)),
+                    json.dumps(profile.learning_data),
+                    profile.last_active.isoformat(),
+                    profile.security_level.value
+                ))
+            
+            conn.commit()
+            conn.close()
+            logger.info("User profiles saved")
+        except Exception as e:
+            logger.error(f"Failed to save user profiles: {e}")
+
+    async def run(self):
+        """Main event-driven application loop."""
+        logger.info(f"Starting Jarvis AI Assistant - Session: {self.session_id}")
+        self._show_welcome()
+        
+        # Authenticate user if required
+        if self.config['security']['require_authentication']:
+            await self._authenticate_user()
+        else:
+            # Use default user
+            self.current_user = self.context_manager.create_user_profile(
+                'default', 'Default User'
+            )
+        
+        # Start concurrent threads
+        self._start_threads()
+        
+        # Start periodic tasks
+        self._start_periodic_tasks()
+        
+        # Start API listeners
+        self._start_api_listeners()
+
+        try:
+            # Start the main event loop
+            await self._main_event_loop()
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested by user")
+        except Exception as e:
+            logger.error(f"Fatal error in main loop: {e}")
+        finally:
+            await self._shutdown_sequence()
+
+    async def _main_event_loop(self):
+        """Enhanced main asyncio event loop."""
+        # Start wake word detection
+        self._start_wake_word_detection()
+
+        while not self.shutdown_event.is_set():
+            try:
+                # Wait for multiple event types
+                tasks = [
+                    asyncio.wait_for(self.input_queue.get(), timeout=0.01),
+                    asyncio.wait_for(self.alert_queue.get(), timeout=0.01),
+                    asyncio.wait_for(self.plugin_queue.get(), timeout=0.01)
+                ]
+                
+                done, pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=1.0
+                )
+
+                for task in done:
+                    try:
+                        event = task.result()
+                        await self._process_event(event)
+                    except asyncio.TimeoutError:
+                        continue
+                    except Exception as e:
+                        self._log_error(f"Error handling event: {e}", event)
+
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                    
+                # Perform periodic checks
+                await self._periodic_checks()
+
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                self._log_error(f"Error in main event loop: {e}", None)
+
+    async def _process_event(self, event: Dict[str, Any]):
+        """Process events with enhanced handling."""
+        event_type = event.get('type')
+        
+        # Log event for analytics
+        if self.current_user:
+            self.analytics_engine.log_interaction(
+                ConversationEntry(
+                    id=str(uuid.uuid4()),
+                    timestamp=datetime.datetime.now(),
+                    user_input=event.get('text', ''),
+                    ai_response='',
+                    context={},
+                    emotion=EmotionState.NEUTRAL
+                ),
+                self.current_user.user_id,
+                0.0
+            )
+        
+        # Handle event based on type
+        handlers = {
+            'wake_word_detected': self._handle_wake_word,
+            'speech_recognized': self._handle_speech_input,
+            'text_input': self._handle_text_input,
+            'system_alert': self._handle_system_alert,
+            'health_check': self._handle_health_check,
+            'api_request': self._handle_api_request,
+            'plugin_event': self._handle_plugin_event,
+            'shutdown': self._handle_shutdown,
+            'command_result': self._handle_command_result,
+            'learning_update': self._handle_learning_update,
+            'user_switch': self._handle_user_switch
+        }
+        
+        handler = handlers.get(event_type)
+        if handler:
+            try:
+                await handler(event)
+            except Exception as e:
+                self._log_error(f"Handler error for {event_type}: {e}", event)
+        else:
+            logger.warning(f"Unknown event type: {event_type}")
+            
+        # Broadcast event to plugins
+        await self.plugin_manager.broadcast_event(event)
+
+    async def _handle_wake_word(self, event: Optional[Dict] = None):
+        """Handle wake word detection with user recognition."""
+        logger.info("Wake word detected")
+        
+        # Check if we need to authenticate
+        if (self.config['security']['require_authentication'] and 
+            not self.current_user):
+            await self._authenticate_user()
+            if not self.current_user:
+                self.tts.speak("Authentication required. Please identify yourself.")
+                return
+        
+        self.is_active = True
+        
+        # Personalized greeting
+        greeting = self._get_personalized_greeting()
+        self.tts.speak(f"{greeting} How can I help you?")
+        
+        # Start listening
+        self._start_speech_recognition()
+        
+        # Update user activity
+        if self.current_user:
+            self.current_user.last_active = datetime.datetime.now()
+
+    async def _handle_speech_input(self, event: Dict[str, Any]):
+        """Enhanced speech input handling."""
+        if not self.is_active:
+            return
+
+        text = event.get('text', '').strip()
+        if not text:
+            return
+
+        logger.info(f"Processing speech input: {text}")
+        
+        # Security check
+        if not self._security_check('process_input', text):
+            self.tts.speak("I'm sorry, I cannot process that request.")
+            return
+        
+        start_time = time.time()
+
+
 
