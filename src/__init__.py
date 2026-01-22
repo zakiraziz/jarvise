@@ -63,4 +63,73 @@ class SpeechRecognizer:
         
         self.listening = True
         self.stop_event.clear()
+                # Start listening thread
+        self.listening_thread = threading.Thread(
+            target=self._listen_loop,
+            daemon=True
+        )
+        self.listening_thread.start()
         
+        print(f"✅ Listening for voice commands... Say '{self.wake_word}' to activate")
+    
+    def stop_listening(self):
+        """Stop listening for voice commands"""
+        self.listening = False
+        self.stop_event.set()
+        print("🔇 Voice listening stopped")
+    
+    def _listen_loop(self):
+        """Main listening loop"""
+        try:
+            # Adjust for ambient noise
+            with self.microphone as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                
+                while self.listening and not self.stop_event.is_set():
+                    try:
+                        print("🎤 Listening... (say wake word)", end='\r')
+                        audio = self.recognizer.listen(
+                            source, 
+                            timeout=3,
+                            phrase_time_limit=5
+                        )
+                        
+                        # Recognize speech
+                        try:
+                            text = self.recognizer.recognize_google(audio).lower()
+                            
+                            # Check for wake word
+                            for wake_word in self.wake_words:
+                                if wake_word in text:
+                                    print(f"\n✅ Wake word detected: {wake_word}")
+                                    
+                                    # Extract command after wake word
+                                    idx = text.find(wake_word) + len(wake_word)
+                                    command = text[idx:].strip()
+                                    
+                                    if command:
+                                        print(f"🤖 Processing: {command}")
+                                        self.on_command(command)
+                                    else:
+                                        print("❓ What can I help you with?")
+                                    
+                                    break
+                            
+                        except self.speech_lib.UnknownValueError:
+                            continue
+                        except self.speech_lib.RequestError:
+                            print("🌐 Network error")
+                            time.sleep(2)
+                        
+                    except self.speech_lib.WaitTimeoutError:
+                        continue
+                    except Exception:
+                        time.sleep(1)
+        
+        except Exception as e:
+            print(f"❌ Voice error: {e}")
+    
+    def cleanup(self):
+        """Cleanup resources"""
+        self.stop_listening()
+
