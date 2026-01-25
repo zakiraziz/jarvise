@@ -353,4 +353,348 @@ Type 'quit' or 'exit' to exit.
                 print("Usage: note [your note text]")
                 print("Example: note Buy groceries tomorrow")
                 return
+                        # Save note to file
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
+            with open(self.notes_file, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {note_text}\n")
+            
+            print(f"[?] Note saved: {note_text}")
+            logger.info(f"Note saved: {note_text[:50]}...")
+            
+        except Exception as e:
+            print(f"[X] Error saving note: {e}")
+    
+    def _list_notes(self, command: str):
+        """List all notes"""
+        try:
+            if not os.path.exists(self.notes_file):
+                print("[?] No notes found")
+                return
+            
+            with open(self.notes_file, 'r', encoding='utf-8') as f:
+                notes = f.read()
+            
+            if not notes.strip():
+                print("[?] No notes found")
+                return
+            
+            print("[?] YOUR NOTES:")
+            print("=" * 50)
+            print(notes)
+            print("=" * 50)
+            
+        except Exception as e:
+            print(f"[X] Error reading notes: {e}")
+    
+    # ========== TODO LIST ==========
+    
+    def _manage_todo(self, command: str):
+        """Manage todo list"""
+        try:
+            parts = command.split(' ', 1)
+            action = parts[1].lower() if len(parts) > 1 else "list"
+            
+            # Load todos
+            with open(self.todo_file, 'r') as f:
+                data = json.load(f)
+            
+            todos = data.get("todos", [])
+            completed = data.get("completed", [])
+            
+            if action == "list":
+                print("[?] TODO LIST:")
+                print("-" * 40)
+                
+                if not todos and not completed:
+                    print("No todos yet! Add one with: todo add [task]")
+                    return
+                
+                if todos:
+                    print("Pending:")
+                    for i, todo in enumerate(todos, 1):
+                        print(f"  {i}. {todo}")
+                
+                if completed:
+                    print("\nCompleted:")
+                    for i, todo in enumerate(completed, 1):
+                        print(f"  {i}. {todo} ()")
+                
+                print("-" * 40)
+                
+            elif action.startswith("add"):
+                task = command[9:].strip()  # Remove 'todo add '
+                if task:
+                    todos.append(task)
+                    print(f" Added: {task}")
+                else:
+                    print("Usage: todo add [task description]")
+                    
+            elif action.startswith("remove"):
+                try:
+                    task_num = int(command.split()[2]) - 1
+                    if 0 <= task_num < len(todos):
+                        removed = todos.pop(task_num)
+                        print(f" Removed: {removed}")
+                    else:
+                        print("[X] Invalid task number")
+                except (IndexError, ValueError):
+                    print("Usage: todo remove [task_number]")
+            
+            elif action.startswith("complete"):
+                try:
+                    task_num = int(command.split()[2]) - 1
+                    if 0 <= task_num < len(todos):
+                        completed_task = todos.pop(task_num)
+                        completed.append(completed_task)
+                        print(f" Completed: {completed_task}")
+                    else:
+                        print("[X] Invalid task number")
+                except (IndexError, ValueError):
+                    print("Usage: todo complete [task_number]")
+            
+            elif action == "clear":
+                data["todos"] = []
+                data["completed"] = []
+                print(" Todo list cleared")
+            
+            else:
+                print("Usage: todo [list|add|remove|complete|clear]")
+                return
+            
+            # Save updated todos
+            data["todos"] = todos
+            data["completed"] = completed
+            
+            with open(self.todo_file, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+        except Exception as e:
+            print(f"[X] Todo error: {e}")
+    
+    # ========== SYSTEM INFO ==========
+    
+    def _system_info(self, command: str):
+        """Show system information"""
+        try:
+            import platform
+            import psutil
+            
+            print("[*] SYSTEM INFORMATION")
+            print("=" * 50)
+            
+            # OS Info
+            print(f"OS: {platform.system()} {platform.release()}")
+            print(f"Version: {platform.version()}")
+            print(f"Architecture: {platform.machine()}")
+            print(f"Processor: {platform.processor()}")
+            
+            # CPU Info
+            cpu_count = psutil.cpu_count(logical=True)
+            cpu_percent = psutil.cpu_percent(interval=1)
+            print(f"CPU Cores: {cpu_count} (Logical)")
+            print(f"CPU Usage: {cpu_percent}%")
+            
+            # Memory Info
+            memory = psutil.virtual_memory()
+            print(f"Memory Usage: {memory.percent}%")
+            print(f"Total RAM: {memory.total / (1024**3):.2f} GB")
+            print(f"Available RAM: {memory.available / (1024**3):.2f} GB")
+            print(f"Used RAM: {memory.used / (1024**3):.2f} GB")
+            
+            # Disk Info
+            disk = psutil.disk_usage('/')
+            print(f"Disk Usage: {disk.percent}%")
+            print(f"Total Disk: {disk.total / (1024**3):.2f} GB")
+            print(f"Free Disk: {disk.free / (1024**3):.2f} GB")
+            print(f"Used Disk: {disk.used / (1024**3):.2f} GB")
+            
+            # Network Info
+            net_io = psutil.net_io_counters()
+            print(f"Bytes Sent: {net_io.bytes_sent / (1024**2):.2f} MB")
+            print(f"Bytes Received: {net_io.bytes_recv / (1024**2):.2f} MB")
+            
+            # Boot Time
+            boot_time = datetime.fromtimestamp(psutil.boot_time())
+            print(f"System Boot: {boot_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Python Info
+            print(f"Python: {sys.version.split()[0]}")
+            print(f"Python Path: {sys.executable}")
+            
+            print("=" * 50)
+            
+        except ImportError:
+            print("[X] System info requires psutil library")
+            print("Install with: pip install psutil")
+        except Exception as e:
+            print(f"[X] Error getting system info: {e}")
+    
+    # ========== WEB & APPLICATIONS ==========
+    
+    def _open_application(self, command: str):
+        """Open application or website"""
+        try:
+            target = command[5:].strip().lower()  # Remove 'open '
+            
+            if not target:
+                print("Usage: open [application or website]")
+                print("\nExamples:")
+                print("  open chrome")
+                print("  open notepad")
+                print("  open youtube")
+                print("  open google.com")
+                return
+            
+            # Common applications mapping
+            apps = {
+                'chrome': 'chrome',
+                'firefox': 'firefox',
+                'edge': 'msedge',
+                'notepad': 'notepad',
+                'calculator': 'calc',
+                'paint': 'mspaint',
+                'cmd': 'cmd',
+                'powershell': 'powershell',
+                'explorer': 'explorer',
+                'word': 'winword',
+                'excel': 'excel',
+                'powerpoint': 'powerpnt',
+                'vscode': 'code',
+                'pycharm': 'pycharm',
+                'spotify': 'spotify',
+                'discord': 'discord',
+            }
+            
+            # Common websites
+            websites = {
+                'youtube': 'https://youtube.com',
+                'google': 'https://google.com',
+                'github': 'https://github.com',
+                'stackoverflow': 'https://stackoverflow.com',
+                'wikipedia': 'https://wikipedia.org',
+                'reddit': 'https://reddit.com',
+                'twitter': 'https://twitter.com',
+                'facebook': 'https://facebook.com',
+                'instagram': 'https://instagram.com',
+                'linkedin': 'https://linkedin.com',
+                'gmail': 'https://gmail.com',
+                'outlook': 'https://outlook.com',
+                'netflix': 'https://netflix.com',
+                'amazon': 'https://amazon.com',
+                'ebay': 'https://ebay.com',
+            }
+            
+            if target in apps:
+                # Open application
+                try:
+                    if platform.system() == "Windows":
+                        os.system(f'start {apps[target]}')
+                    elif platform.system() == "Darwin":  # macOS
+                        os.system(f'open -a {apps[target]}')
+                    else:  # Linux
+                        os.system(f'{apps[target]} &')
+                    
+                    print(f" Opened {target}")
+                except Exception as e:
+                    print(f"[X] Error opening {target}: {e}")
+            
+            elif target in websites:
+                # Open website
+                webbrowser.open(websites[target])
+                print(f" Opened {target}")
+            
+            elif '.' in target:
+                # Try to open as website
+                if not target.startswith('http'):
+                    target = f'https://{target}'
+                webbrowser.open(target)
+                print(f" Opened {target}")
+            
+            else:
+                print(f"[X] Don't know how to open: {target}")
+                print("\nAvailable applications:")
+                print(", ".join(sorted(apps.keys())))
+                print("\nAvailable websites:")
+                print(", ".join(sorted(websites.keys())))
+        
+        except Exception as e:
+            print(f"[X] Error opening application: {e}")
+    
+    def _web_search(self, command: str):
+        """Search the web"""
+        try:
+            # Extract query
+            parts = command.split(' ', 1)
+            if len(parts) < 2:
+                print("Usage: search [query]")
+                print("Example: search python tutorials")
+                return
+            
+            query = parts[1].strip()
+            
+            # Encode query for URL
+            import urllib.parse
+            encoded_query = urllib.parse.quote(query)
+            
+            # Choose search engine
+            search_engine = self.config.get('web', {}).get('search_engine', 'google')
+            
+            search_urls = {
+                'google': f'https://www.google.com/search?q={encoded_query}',
+                'bing': f'https://www.bing.com/search?q={encoded_query}',
+                'duckduckgo': f'https://duckduckgo.com/?q={encoded_query}',
+                'yahoo': f'https://search.yahoo.com/search?p={encoded_query}',
+            }
+            
+            url = search_urls.get(search_engine.lower(), search_urls['google'])
+            webbrowser.open(url)
+            
+            print(f"[?] Searching {search_engine} for: {query}")
+            
+        except Exception as e:
+            print(f"[X] Search error: {e}")
+    
+    # ========== WEATHER & NEWS ==========
+    
+    def _weather_info(self, command: str):
+        """Get weather information"""
+        try:
+            # Extract location
+            parts = command.split(' ', 1)
+            location = parts[1].strip() if len(parts) > 1 else ""
+            
+            if not location:
+                print("Usage: weather [city]")
+                print("Example: weather New York")
+                print("Example: weather London, UK")
+                return
+            
+            # Use OpenWeatherMap API (would need API key)
+            print(f"[INFO] Getting weather for {location}...")
+            print("(Weather API not configured. Add API key to config.yaml)")
+            
+            # For now, use AI to simulate weather
+            weather_prompt = f"What's the weather like in {location}? Give a realistic forecast."
+            response = self.ai.chat(weather_prompt)
+            print(f"\n{response}")
+            
+        except Exception as e:
+            print(f"[X] Weather error: {e}")
+    
+    def _news_info(self, command: str):
+        """Get news information"""
+        try:
+            print("[?] Getting latest news...")
+            print("(News API not configured. Add API key to config.yaml)")
+            
+            # Use AI to generate news summary
+            news_prompt = "What are the top 3 news headlines today? Be brief."
+            response = self.ai.chat(news_prompt)
+            print(f"\n{response}")
+            
+        except Exception as e:
+            print(f"[X] News error: {e}")
+    
+
+
