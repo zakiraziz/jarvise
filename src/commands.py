@@ -695,6 +695,214 @@ Type 'quit' or 'exit' to exit.
             
         except Exception as e:
             print(f"[X] News error: {e}")
+        # ========== ENTERTAINMENT ==========
     
+    def _tell_joke(self, command: str):
+        """Tell a joke"""
+        try:
+            print("[?] Here's a joke:")
+            jokes = [
+                "Why do programmers prefer dark mode? Because light attracts bugs!",
+                "Why do Python developers need glasses? Because they can't C!",
+                "What's a programmer's favorite hangout place? Foo Bar!",
+                "Why did the programmer quit his job? He didn't get arrays!",
+                "How many programmers does it take to change a light bulb? None, that's a hardware problem!",
+                "Why do Java developers wear glasses? Because they don't C#!",
+                "What's the object-oriented way to become wealthy? Inheritance!",
+                "Why did the developer go broke? He used up all his cache!",
+                "What do you call a programmer from Finland? Nerdic!",
+                "Why was the JavaScript developer sad? He didn't Node how to Express himself!",
+            ]
+            
+            import random
+            print(f"\n{random.choice(jokes)}\n")
+            
+        except Exception as e:
+            print(f"[X] Joke error: {e}")
+    
+    def _get_quote(self, command: str):
+        """Get inspirational quote"""
+        try:
+            print("[*] Inspirational quote:")
+            quotes = [
+                "The only way to do great work is to love what you do. - Steve Jobs",
+                "Innovation distinguishes between a leader and a follower. - Steve Jobs",
+                "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt",
+                "The way to get started is to quit talking and begin doing. - Walt Disney",
+                "Don't watch the clock; do what it does. Keep going. - Sam Levenson",
+                "The only limit to our realization of tomorrow will be our doubts of today. - Franklin D. Roosevelt",
+                "It does not matter how slowly you go as long as you do not stop. - Confucius",
+                "Everything you've ever wanted is on the other side of fear. - George Addair",
+                "Success is not final, failure is not fatal: it is the courage to continue that counts. - Winston Churchill",
+                "Believe you can and you're halfway there. - Theodore Roosevelt",
+            ]
+            
+            import random
+            print(f"\n{random.choice(quotes)}\n")
+            
+        except Exception as e:
+            print(f"[X] Quote error: {e}")
+    
+    # ========== CODE ANALYSIS ==========
+    
+    def _analyze_code(self, command: str):
+        """Analyze code"""
+        try:
+            code = command[5:].strip()  # Remove 'code '
+            
+            if not code:
+                print("Usage: code [your code here]")
+                print("Example: code print('Hello, World!')")
+                return
+            
+            print("[?] Analyzing code...")
+            response = self.ai.analyze_code(code)
+            print(f"\n{response}")
+            
+        except Exception as e:
+            print(f"[X] Code analysis error: {e}")
+    
+    def _learn_concept(self, command: str):
+        """Learn a programming concept"""
+        try:
+            concept = command[6:].strip()  # Remove 'learn '
+            
+            if not concept:
+                print("Usage: learn [concept]")
+                print("Example: learn recursion")
+                print("Example: learn object oriented programming")
+                return
+            
+            print(f"[?] Learning about {concept}...")
+            response = self.ai.explain_concept(concept)
+            print(f"\n{response}")
+            
+        except Exception as e:
+            print(f"[X] Learning error: {e}")
+    
+    def _manage_budget(self, command: str):
+        print("[*] Budget management coming soon!")
+    
+    def _shopping_list(self, command: str):
+        print("[?] Shopping list coming soon!")
+    
+    def _travel_info(self, command: str):
+        print("[?] Travel info coming soon!")
+    
+    def _crypto_info(self, command: str):
+        print("[?] Cryptocurrency info coming soon!")
+    
+    def _stock_info(self, command: str):
+        print("[*] Stock info coming soon!")
+    
+    def _get_news(self, command: str):
+        print("[?] News coming soon!")
+    
+    def _movie_info(self, command: str):
+        print("[?] Movie info coming soon!")
+    
+    def _tv_show_info(self, command: str):
+        print("[?] TV show info coming soon!")
+    
+    def _sports_info(self, command: str):
+        print(" Sports info coming soon!")
+    
+    def _weather_forecast(self, command: str):
+        print("[INFO] Weather forecast coming soon!")
+    
+    def _show_map(self, command: str):
+        print("[*] Map viewer coming soon!")
+    
+    def _get_directions(self, command: str):
+        print("[?] Directions coming soon!")
+    
+    def _flight_info(self, command: str):
+        print("[?] Flight info coming soon!")
+    
+    def _hotel_info(self, command: str):
+        print("[?] Hotel info coming soon!")
+    
+    def _restaurant_info(self, command: str):
+        print("[*] Restaurant info coming soon!")
+    
+    def _event_info(self, command: str):
+        print("[?] Event info coming soon!")
+    
+    def _schedule_meeting(self, command: str):
+        print("[*] Meeting scheduler coming soon!")
+    
+    def _make_call(self, command: str):
+        print("[?] Call feature coming soon!")
+    
+    def _send_message(self, command: str):
+        print("[*] Message feature coming soon!")
+    
+    def _wikipedia_search(self, command: str):
+        print("[?] Wikipedia search coming soon!")
+    
+    def _translate_text(self, command: str):
+        print("[W] Translation service coming soon!")
+    
+    def _set_reminder(self, command: str):
+        print(" Reminder feature coming soon!")
+    
+    def _set_alarm(self, command: str):
+        print(" Alarm feature coming soon!")
+    
+    def _set_timer(self, command: str):
+        print("[?] Timer feature coming soon!")
+    
+    def _send_email(self, command: str):
+        print("[?] Email feature coming soon!")
+    
+    def _file_operations(self, command: str):
+        print("[?] File operations coming soon!")
+    
+    def _run_command(self, command: str):
+        print("[?] Command execution coming soon!")
+    
+    def _run_python(self, command: str):
+        print("[?] Python execution coming soon!")
+    
+    def _system_shutdown(self, command: str):
+        print("[?] System shutdown coming soon!")
+    
+    def _system_restart(self, command: str):
+        print("[?] System restart coming soon!")
+    
+    def _take_screenshot(self, command: str):
+        print("[?] Screenshot coming soon!")
+    
+    def _record_screen(self, command: str):
+        print("[?] Screen recording coming soon!")
+    
+    def _play_music(self, command: str):
+        print("[?] Music player coming soon!")
+    
+    def _play_video(self, command: str):
+        print("[?] Video player coming soon!")
+    
+    def _play_game(self, command: str):
+        print("[?] Game launcher coming soon!")
+    
+    def _read_book(self, command: str):
+        print("[?] E-reader coming soon!")
+    
+    def _get_recipe(self, command: str):
+        print("[*] Recipe finder coming soon!")
+    
+    def _get_exercise(self, command: str):
+        print("[?] Fitness guide coming soon!")
+    
+    def _start_meditation(self, command: str):
+        print("[?] Meditation guide coming soon!")
+    
+    def _social_media(self, command: str):
+        print("[M] Social media tools coming soon!")
+    
+    def _backup_files(self, command: str):
+        print("[?] Backup utility coming soon!")
+    
+
 
 
