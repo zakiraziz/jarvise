@@ -902,7 +902,223 @@ Type 'quit' or 'exit' to exit.
     
     def _backup_files(self, command: str):
         print("[?] Backup utility coming soon!")
+        def _update_system(self, command: str):
+        print("[?] System update coming soon!")
     
+    def _install_package(self, command: str):
+        print("[?] Package installer coming soon!")
+    
+    def _uninstall_package(self, command: str):
+        print("[*] Package uninstaller coming soon!")
+    
+    def _scan_virus(self, command: str):
+        print("[*] Virus scanner coming soon!")
+    
+    def _clean_system(self, command: str):
+        print("[?] System cleaner coming soon!")
+    
+    def _optimize_system(self, command: str):
+        print("[*] System optimizer coming soon!")
+    
+    def _network_info(self, command: str):
+        print("[W] Network info coming soon!")
+    
+    def _wifi_info(self, command: str):
+        print("[?] WiFi info coming soon!")
+    
+    def _bluetooth_info(self, command: str):
+        print("[?] Bluetooth info coming soon!")
+    
+    def _printer_info(self, command: str):
+        print("[*] Printer info coming soon!")
+    
+    def _camera_info(self, command: str):
+        print("[?] Camera info coming soon!")
+    
+    def _microphone_info(self, command: str):
+        print("[*] Microphone info coming soon!")
+    
+    def _speaker_info(self, command: str):
+        print("[*] Speaker info coming soon!")
+    
+    def _display_info(self, command: str):
+        print("[*] Display info coming soon!")
+    
+    def _battery_info(self, command: str):
+        print("[?] Battery info coming soon!")
+    
+    def _disk_info(self, command: str):
+        print("[?] Disk info coming soon!")
+    
+    def _memory_info(self, command: str):
+        print("[?] Memory info coming soon!")
+    
+    def _cpu_info(self, command: str):
+        print("[?] CPU info coming soon!")
+    
+    def _gpu_info(self, command: str):
+        print("[?] GPU info coming soon!")
+    
+    def _os_info(self, command: str):
+        print("[*] OS info coming soon!")
+    
+    def _version_info(self, command: str):
+        print("[?] Version info coming soon!")
+    
+    def _license_info(self, command: str):
+        print("[?] License info coming soon!")
+    
+    def _contact_info(self, command: str):
+        print("[*] Contact info coming soon!")
+    
+    def _donate_info(self, command: str):
+        print("[?] Donation info coming soon!")
+    
+    def _send_feedback(self, command: str):
+        print("[*] Feedback system coming soon!")
+    
+    def _report_bug(self, command: str):
+        print("[?] Bug reporting coming soon!")
+    
+    def _request_feature(self, command: str):
+        print(" Feature request coming soon!")
+    
+    def _show_docs(self, command: str):
+        print("[?] Documentation coming soon!")
+    
+    def _show_tutorial(self, command: str):
+        print("[*] Tutorial coming soon!")
+    
+    def _show_examples(self, command: str):
+        print("[?] Examples coming soon!")
+    
+    def _show_api(self, command: str):
+        print("[?] API documentation coming soon!")
+    
+    def _open_github(self, command: str):
+        print("[?] Opening GitHub...")
+    
+    def _open_website(self, command: str):
+        print("[W] Opening website...")
+    
+    def _open_forum(self, command: str):
+        print("[*] Opening forum...")
+    
+    def _open_blog(self, command: str):
+        print("[?] Opening blog...")
+    
+    def _open_youtube(self, command: str):
+        print("[?] Opening YouTube...")
+    
+    def _open_twitter(self, command: str):
+        print("[?] Opening Twitter...")
+    
+    def _open_facebook(self, command: str):
+        print("[?] Opening Facebook...")
+    
+    def _open_instagram(self, command: str):
+        print("[?] Opening Instagram...")
+    
+    def _open_linkedin(self, command: str):
+        print("[?] Opening LinkedIn...")
+    
+    def _open_reddit(self, command: str):
+        print("[?] Opening Reddit...")
+    
+    def _open_discord(self, command: str):
+        print("[?] Opening Discord...")
+    
+    def _open_slack(self, command: str):
+        print("[?] Opening Slack...")
+    
+    def _open_whatsapp(self, command: str):
+        print("[*] Opening WhatsApp...")
+    
+    def _open_telegram(self, command: str):
+        print("[?] Opening Telegram...")
+    
+    def _open_signal(self, command: str):
+        print("[*] Opening Signal...")
+    
+    # ========== NETWORK COMMANDS ==========
+    
+    def _ping_host(self, command: str):
+        """Ping a network host"""
+        try:
+            parts = command.split(' ', 1)
+            host = parts[1] if len(parts) > 1 else "google.com"
+            
+            print(f"[?] Pinging {host}...")
+            
+            # Run ping command based on OS
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            count = '4'
+            
+            result = subprocess.run(
+                ['ping', param, count, host],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                print(" Host is reachable")
+            else:
+                print("[X] Host is not reachable")
+            
+            print(f"\n{result.stdout}")
+            
+        except Exception as e:
+            print(f"[X] Ping error: {e}")
+    
+    def _show_ip(self, command: str):
+        """Show IP address"""
+        try:
+            import socket
+            
+            # Get local IP
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            
+            print(f"[W] Network Information:")
+            print(f"  Hostname: {hostname}")
+            print(f"  Local IP: {local_ip}")
+            
+            # Try to get public IP
+            try:
+                import requests
+                public_ip = requests.get('https://api.ipify.org').text
+                print(f"  Public IP: {public_ip}")
+            except:
+                print("  Public IP: Could not determine")
+            
+        except Exception as e:
+            print(f"[X] IP error: {e}")
+    
+    def _about_info(self, command: str):
+        """Show about information"""
+        about_text = """
+[?] JARVIS AI ASSISTANT
+Version 1.0.0
+
+A complete AI assistant built with Python, featuring:
+ OpenAI GPT integration
+ Voice recognition
+ Command system
+ File management
+ System monitoring
+ Web utilities
+ And much more!
+
+Created with [?] for developers and AI enthusiasts.
+
+[?] GitHub: https://github.com/yourusername/jarvis-ai
+[?] Contact: your.email@example.com
+[?] Report issues: GitHub Issues
+
+License: MIT
+"""
+        print(about_text)
+
 
 
 
