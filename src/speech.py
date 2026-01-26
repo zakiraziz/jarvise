@@ -1,4 +1,8 @@
-import pvporcupine
+try:
+    import pvporcupine
+except ImportError:
+    print("Warning: pvporcupine not available, wake word detection disabled")
+    pvporcupine = None
 try:
     import pyaudio
 except ImportError:
@@ -607,4 +611,113 @@ class SpeechRecognizer:
                 self.stop_recording()
                 break
             time.sleep(0.1)
-        }
+
+    def stop_recording(self):
+        """Stop recording audio."""
+        with self.state_lock:
+            self.state = 'processing'
+            if self.on_recording_stop:
+                self.on_recording_stop()
+
+
+class SpeechHandler:
+    """Main speech handling interface combining wake word detection and recognition."""
+    
+    def __init__(self, config=None, config_path=None):
+        """
+        Initialize the speech handler.
+        
+        Args:
+            config: Configuration dictionary
+            config_path: Path to configuration file
+        """
+        self.config = config or {}
+        self.enabled = self.config.get('enabled', True)
+        
+        # Check if required dependencies are available
+        if not pvporcupine or not pyaudio:
+            self.enabled = False
+            logger.warning("Voice mode disabled: missing required dependencies")
+        
+        self.recognizer = None
+        if self.enabled:
+            try:
+                access_key = self.config.get('access_key', '')
+                if not access_key:
+                    self.enabled = False
+                    logger.warning("Voice mode disabled: no Picovoice access key")
+                else:
+                    self.recognizer = SpeechRecognizer(
+                        access_key=access_key,
+                        config=self.config
+                    )
+            except Exception as e:
+                logger.error(f"Failed to initialize speech recognizer: {e}")
+                self.enabled = False
+    
+    def start_voice_mode(self, callback=None):
+        """Start listening for voice input.
+        
+        Args:
+            callback: Optional callback function to call when command is recognized
+        """
+        if not self.enabled:
+            logger.warning("Voice mode is not enabled")
+            return False
+        
+        try:
+            if self.recognizer:
+                # Set callback if provided
+                if callback:
+                    self.recognizer.on_detection = callback
+                self.recognizer.start_wake_word_detection()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start voice mode: {e}")
+            return False
+    
+    def stop_voice_mode(self):
+        """Stop listening for voice input."""
+        try:
+            if self.recognizer:
+                self.recognizer.stop_wake_word_detection()
+                self.recognizer.stop_audio_stream()
+        except Exception as e:
+            logger.error(f"Error stopping voice mode: {e}")
+    
+    def listen_for_wake_word(self):
+        """Listen for wake word."""
+        if not self.enabled or not self.recognizer:
+            logger.warning("Voice mode is not enabled")
+            return False
+        
+        try:
+            self.recognizer.start_audio_stream()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to listen for wake word: {e}")
+            return False
+    
+    def recognize_speech(self):
+        """Recognize speech after wake word detection."""
+        if not self.enabled or not self.recognizer:
+            logger.warning("Voice mode is not enabled")
+            return None
+        
+        try:
+            # Placeholder for speech recognition
+            return "recognized text"
+        except Exception as e:
+            logger.error(f"Speech recognition error: {e}")
+            return None
+    
+    def speak(self, text):
+        """Speak text using text-to-speech."""
+        try:
+            # Simple TTS using pyttsx3
+            import pyttsx3
+            engine = pyttsx3.init()
+            engine.say(text)
+            engine.runAndWait()
+        except Exception as e:
+            logger.error(f"Text-to-speech error: {e}")
