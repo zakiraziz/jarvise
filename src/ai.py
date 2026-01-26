@@ -1,103 +1,122 @@
-import openai
+"""
+AI Assistant Module
+Handles AI interactions using OpenAI API
+"""
+
+from openai import OpenAI
 import logging
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
 class AIAssistant:
-    """General AI assistant using OpenAI for natural language processing."""
-
-    def __init__(self, api_key: str, model: str = "gpt-4-turbo-preview"):
-        self.api_key = api_key
-        self.model = model
-        self.client = openai.OpenAI(api_key=api_key)
-
-    def process_query(self, query: str, context: Optional[str] = None) -> str:
+    def __init__(self, config: dict):
         """
-        Process a natural language query and return response.
+        Initialize AI assistant
 
         Args:
-            query: User's query
-            context: Optional context information
-
-        Returns:
-            AI response as string
+            config: Configuration dictionary
         """
-        try:
-            messages = [
-                {"role": "system", "content": "You are Jarvis, a helpful AI assistant. Respond naturally and assist with user requests."}
-            ]
+        self.config = config
+        self.client = OpenAI(api_key=config['openai']['api_key'])
+        self.model = config['openai']['model']
+        self.temperature = config['openai']['temperature']
+        self.max_tokens = config['openai']['max_tokens']
+        self.conversation_history: List[Dict[str, str]] = []
+        self.max_history = config['assistant']['max_conversation_history']
 
-            if context:
-                messages.append({"role": "system", "content": f"Context: {context}"})
-
-            messages.append({"role": "user", "content": query})
-
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.7,
-                timeout=30
-            )
-
-            return response.choices[0].message.content.strip()
-
-        except Exception as e:
-            logger.error(f"AI processing error: {e}")
-            return "I'm sorry, I encountered an error processing your request."
-
-    def decide_action(self, user_input: str) -> Dict:
+    def generate_response(self, user_input: str) -> str:
         """
-        Decide what action to take based on user input.
+        Generate AI response to user input
 
         Args:
-            user_input: User's spoken or typed input
+            user_input: User's message
 
         Returns:
-            Dict with action type and parameters
+            AI response string
         """
         try:
-            prompt = """
-Analyze this user input and decide what action Jarvis should take.
-Return a JSON-like response with 'action' and 'params' keys.
+            # Add user message to history
+            self.conversation_history.append({"role": "user", "content": user_input})
 
-Actions:
-- 'command': Execute a modular command (params: command_name, command_params)
-- 'respond': Just respond with text (params: response_text)
-- 'search': Perform web search (params: query)
-- 'schedule': Schedule a task (params: task, time)
+            # Trim history if too long
+            if len(self.conversation_history) > self.max_history:
+                self.conversation_history = self.conversation_history[-self.max_history:]
 
-User input: "{}"
-
-Response format: {{"action": "action_name", "params": {}}}
-""".format(user_input)
-
+            # Generate response
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an action decision engine. Analyze user input and return structured action decisions."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=200,
-                temperature=0.1,
-                timeout=15
+                messages=self.conversation_history,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
             )
 
-            # Parse the response (simplified parsing)
-            content = response.choices[0].message.content.strip()
-            # For simplicity, assume it's a dict-like string
-            # In real implementation, use proper JSON parsing
-            if 'command' in content.lower():
-                return {"action": "command", "params": {"command_name": "unknown", "command_params": ""}}
-            elif 'search' in content.lower():
-                return {"action": "search", "params": {"query": user_input}}
-            elif 'schedule' in content.lower():
-                return {"action": "schedule", "params": {"task": user_input, "time": "now"}}
-            else:
-                return {"action": "respond", "params": {"response_text": content}}
+            ai_response = response.choices[0].message.content
+
+            # Add AI response to history
+            self.conversation_history.append({"role": "assistant", "content": ai_response})
+
+            return ai_response
 
         except Exception as e:
-            logger.error(f"Action decision error: {e}")
-            return {"action": "respond", "params": {"response_text": "I didn't understand that request."}}
+            logger.error(f"Error generating AI response: {e}")
+            return "Sorry, I encountered an error processing your request."
+
+    def clear_history(self):
+        """Clear conversation history"""
+        self.conversation_history = []
+    
+    def chat(self, user_input: str) -> str:
+        """
+        Alias for generate_response for backward compatibility
+        
+        Args:
+            user_input: User's message
+            
+        Returns:
+            AI response string
+        """
+        return self.generate_response(user_input)
+    
+    def get_history_summary(self) -> str:
+        """
+        Get a summary of conversation history
+        
+        Returns:
+            Formatted conversation history string
+        """
+        if not self.conversation_history:
+            return "No conversation history yet."
+        
+        summary = ""
+        for i, msg in enumerate(self.conversation_history[-10:], 1):  # Show last 10 messages
+            role = "You" if msg['role'] == 'user' else "Jarvis"
+            content = msg['content'][:100]  # Truncate long messages
+            summary += f"{i}. {role}: {content}...\n" if len(msg['content']) > 100 else f"{i}. {role}: {content}\n"
+        return summary
+    
+    def analyze_code(self, code: str) -> str:
+        """
+        Analyze code and provide feedback
+        
+        Args:
+            code: Code to analyze
+            
+        Returns:
+            AI analysis string
+        """
+        prompt = f"Please analyze this code and provide feedback:\n\n{code}"
+        return self.generate_response(prompt)
+    
+    def explain_concept(self, concept: str) -> str:
+        """
+        Explain a programming concept
+        
+        Args:
+            concept: Concept to explain
+            
+        Returns:
+            AI explanation string
+        """
+        prompt = f"Please explain the programming concept: {concept}"
+        return self.generate_response(prompt)
