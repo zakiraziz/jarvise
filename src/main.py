@@ -326,3 +326,81 @@ class JarvisAssistant:
         elif choice == "6":
             self.ai.clear_history()
             print("✅ Conversation history cleared")
+    
+    def show_help(self):
+        """Show comprehensive help"""
+        self.commands.process("help")
+        input("\nPress Enter to continue...")
+    
+    def run(self):
+        """Main run loop"""
+        try:
+            # Initialize
+            if not self.initialize():
+                return False
+            
+            self.running = True
+            self.show_welcome()
+            
+            # Main loop
+            while self.running:
+                try:
+                    if not self.show_menu():
+                        break
+                        
+                except KeyboardInterrupt:
+                    print("\n\n⏹️ Interrupted by user")
+                    break
+                except Exception as e:
+                    print(f"❌ Error: {e}")
+                    continue
+            
+            # Shutdown
+            self.shutdown()
+            return True
+            
+        except Exception as e:
+            print(f"💥 Fatal error: {e}")
+            return False
+    
+    def shutdown(self):
+        """Clean shutdown"""
+        print("\n" + "="*70)
+        print("🛑 Shutting down Jarvis...")
+        print("="*70)
+        
+        # Save any pending data
+        if self.commands:
+            self.commands.save_data()
+        
+        # Clear resources
+        if self.speech:
+            self.speech.cleanup()
+        
+        if self.logger:
+            self.logger.info("Jarvis shutdown complete")
+        
+        print("\n✅ Jarvis has been shut down. Goodbye! 👋")
+        
+        # Speak goodbye
+        self.speech.speak("Goodbye! Have a wonderful day!")
+
+
+def main():
+    """Main entry point - RUN THIS!"""
+    print("🚀 Starting Jarvis AI Assistant...")
+    
+    try:
+        # Create and run assistant
+        assistant = JarvisAssistant()
+        assistant.run()
+        
+    except Exception as e:
+        print(f"💥 Application failed: {e}")
+        return 1
+    
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
