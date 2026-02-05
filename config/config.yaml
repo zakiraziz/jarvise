@@ -1,38 +1,46 @@
+# Jarvis AI Assistant Configuration
+
+# OpenAI Configuration
 openai:
-  api_key: "your_openai_api_key_here"
-  model: "gpt-4-turbo-preview"
-  temperature: 0.1
-  max_tokens: 2000
+  api_key: ""  # Add your OpenAI API key here
+  model: "gpt-3.5-turbo"
+  temperature: 0.7
+  max_tokens: 1000
+  timeout: 30
 
+# Assistant Settings
 assistant:
-  name: "CodeAssist"
-  version: "1.0.0"
-  max_conversation_history: 50
+  name: "Jarvis"
+  version: "2.0.0"
+  max_conversation_history: 15
   safety_check_enabled: true
-  documentation_enabled: true
+  auto_save_notes: true
 
-logging:
-  level: "INFO"
-  file: "logs/code_assistant.log"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# Speech Settings
+speech:
+  enabled: true
+  voice_rate: 150
+  voice_volume: 1.0
+  voice_gender: "male"
 
+# Features
+features:
+  voice_mode: true
+  text_mode: true
+  file_operations: true
+  web_search: true
+  system_commands: true
+
+# Safety Settings
 safety:
   blocked_keywords:
-    - "malware"
-    - "virus"
-    - "hack"
-    - "exploit"
-    - "crack"
-    - "keylogger"
-  allowed_languages:
-    - "python"
-    - "javascript"
-    - "java"
-    - "cpp"
-    - "c"
-    - "go"
-    - "rust"
-    - "typescript"
-    - "html"
-    - "css"
-    - "sql"
+    - "format c:"
+    - "rm -rf"
+    - "del /f"
+  max_file_size_mb: 10
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/jarvis.log"
