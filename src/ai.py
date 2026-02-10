@@ -458,4 +458,170 @@ class AIAssistant:
                 last_error = e
                 logger.warning(f"Provider {provider.value} failed: {e}")
                 continue
+                # All providers failed
+        error_msg = f"All AI providers failed. Last error: {last_error}"
+        logger.error(error_msg)
         
+        return AIResponse(
+            content=f"⚠️ Error: {error_msg}",
+            provider="none",
+            model="none",
+            processing_time=(datetime.now() - start_time).total_seconds()
+        )
+    
+    async def chat_async(self, user_input: str, use_tools: bool = True) -> AIResponse:
+        """Async version of chat"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, 
+            lambda: self.chat(user_input, use_tools)
+        )
+    
+    def _prepare_messages(self, use_tools: bool = True) -> List[Dict]:
+        """Prepare messages for AI API call"""
+        messages = [{"role": "system", "content": self.config.system_prompt}]
+        
+        # Add conversation history
+        for msg in self.conversation_history[-self.config.max_history:]:
+            messages.append({"role": msg.role, "content": msg.content})
+        
+        # Add tool descriptions if tools are enabled
+        if use_tools and self.config.enabled_tools:
+            tool_descriptions = "\n\nAVAILABLE TOOLS:\n"
+            for tool in self.config.enabled_tools:
+                if tool in self.tools:
+                    desc = self.tools[tool]["description"]
+                    tool_descriptions += f"- {tool.value}: {desc}\n"
+            
+            # Modify system prompt to include tools
+            messages[0]["content"] += tool_descriptions
+        
+        return messages
+    
+    def _call_provider(self, provider: AIProvider, messages: List[Dict], use_tools: bool) -> AIResponse:
+        """Call specific AI provider"""
+        start_time = datetime.now()
+        
+        if provider == AIProvider.OPENAI:
+            return self._call_openai(messages)
+        elif provider == AIProvider.ANTHROPIC:
+            return self._call_anthropic(messages)
+        elif provider == AIProvider.GOOGLE:
+            return self._call_google(messages)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
+    
+    def _call_openai(self, messages: List[Dict]) -> AIResponse:
+        """Call OpenAI API"""
+        client = self.clients[AIProvider.OPENAI]['sync']
+        
+        response = client.chat.completions.create(
+            model=self.config.openai_model,
+            messages=messages,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            top_p=self.config.top_p,
+            frequency_penalty=self.config.frequency_penalty,
+            presence_penalty=self.config.presence_penalty
+        )
+        
+        return AIResponse(
+            content=response.choices[0].message.content,
+            provider=AIProvider.OPENAI.value,
+            model=self.config.openai_model,
+            tokens_used=response.usage.total_tokens if response.usage else 0,
+            processing_time=(datetime.now() - datetime.fromtimestamp(start_time.timestamp())).total_seconds(),
+            raw_response=response
+        )
+    
+    def _call_anthropic(self, messages: List[Dict]) -> AIResponse:
+        """Call Anthropic API"""
+        client = self.clients[AIProvider.ANTHROPIC]['sync']
+        
+        # Convert messages to Anthropic format
+        anthropic_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                continue  # System message handled separately
+            anthropic_messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+        
+        response = client.messages.create(
+            model=self.config.anthropic_model,
+            messages=anthropic_messages,
+            system=self.config.system_prompt,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature
+        )
+        
+        return AIResponse(
+            content=response.content[0].text,
+            provider=AIProvider.ANTHROPIC.value,
+            model=self.config.anthropic_model,
+            tokens_used=response.usage.input_tokens + response.usage.output_tokens,
+            processing_time=(datetime.now() - datetime.fromtimestamp(start_time.timestamp())).total_seconds(),
+            raw_response=response
+        )
+    
+    def _call_google(self, messages: List[Dict]) -> AIResponse:
+        """Call Google AI API"""
+        model = self.clients[AIProvider.GOOGLE].GenerativeModel(self.config.google_model)
+        
+        # Convert messages to text
+        conversation_text = ""
+        for msg in messages:
+            if msg["role"] == "system":
+                conversation_text += f"System: {msg['content']}\n\n"
+            else:
+                conversation_text += f"{msg['role'].title()}: {msg['content']}\n\n"
+        
+        response = model.generate_content(
+            conversation_text,
+            generation_config={
+                "temperature": self.config.temperature,
+                "max_output_tokens": self.config.max_tokens,
+                "top_p": self.config.top_p
+            }
+        )
+        
+        return AIResponse(
+            content=response.text,
+            provider=AIProvider.GOOGLE.value,
+            model=self.config.google_model,
+            processing_time=(datetime.now() - datetime.fromtimestamp(start_time.timestamp())).total_seconds(),
+            raw_response=response
+        )
+    
+    def _compress_context_if_needed(self):
+        """Compress conversation history if it's too long"""
+        if not self.config.enable_context_compression:
+            return
+        
+        total_tokens = sum(len(msg.content.split()) for msg in self.conversation_history)
+        
+        if total_tokens > self.config.context_compression_threshold:
+            logger.info("Compressing conversation context...")
+            
+            # Keep first and last few messages, summarize the middle
+            if len(self.conversation_history) > 10:
+                # Summarize middle messages
+                middle_messages = self.conversation_history[4:-4]
+                summary_prompt = "Summarize this conversation context briefly:\n\n"
+                for msg in middle_messages:
+                    summary_prompt += f"{msg.role}: {msg.content}\n"
+                
+                # Use AI to summarize (could be optimized)
+                try:
+                    summary_response = self.chat(summary_prompt, use_tools=False)
+                    summary = f"[Compressed context: {summary_response.content[:200]}...]"
+                    
+                    # Replace middle messages with summary
+                    self.conversation_history = (
+                        self.conversation_history[:4] +
+                        [AIMessage(role="system", content=summary)] +
+                        self.conversation_history[-4:]
+                    )
+                except:
+ 
