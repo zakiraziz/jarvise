@@ -624,4 +624,201 @@ class AIAssistant:
                         self.conversation_history[-4:]
                     )
                 except:
- 
+                    # If summarization fails, just truncate
+                    self.conversation_history = (
+                        self.conversation_history[:6] + 
+                        self.conversation_history[-4:]
+                    )
+    
+    def _schedule_cache_save(self):
+        """Schedule cache save in background"""
+        if self.cache_save_thread is None or not self.cache_save_thread.is_alive():
+            self.cache_save_thread = threading.Thread(
+                target=self._background_cache_save,
+                daemon=True
+            )
+            self.cache_save_thread.start()
+    
+    def _background_cache_save(self):
+        """Background thread for saving cache"""
+        time.sleep(5)  # Wait a bit before saving
+        self._save_cache()
+    
+    def clear_history(self):
+        """Clear conversation history"""
+        self.conversation_history = []
+        logger.info("Conversation history cleared")
+    
+    def get_history(self, limit: int = None) -> List[AIMessage]:
+        """Get conversation history"""
+        if limit:
+            return self.conversation_history[-limit:]
+        return self.conversation_history.copy()
+    
+    def export_history(self, filepath: str = None):
+        """Export conversation history to JSON"""
+        if not filepath:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = f"conversation_history_{timestamp}.json"
+        
+        try:
+            history_data = []
+            for msg in self.conversation_history:
+                history_data.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp.isoformat(),
+                    "metadata": msg.metadata
+                })
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(history_data, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"History exported to {filepath}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to export history: {e}")
+            return False
+    
+    def add_tool(self, tool_name: str, tool_func: Callable, description: str, parameters: Dict):
+        """Add a custom tool"""
+        tool_enum = AITool(tool_name) if tool_name in [t.value for t in AITool] else None
+        
+        if not tool_enum:
+            # Create custom tool enum value
+            tool_enum = AITool(tool_name)
+        
+        self.tools[tool_enum] = {
+            "function": tool_func,
+            "description": description,
+            "parameters": parameters
+        }
+        
+        logger.info(f"Added custom tool: {tool_name}")
+    
+    def get_available_providers(self) -> List[str]:
+        """Get list of available AI providers"""
+        return [p.value for p in self.clients.keys()]
+    
+    def get_stats(self) -> Dict:
+        """Get assistant statistics"""
+        total_tokens = sum(
+            msg.metadata.get('tokens_used', 0) 
+            for msg in self.conversation_history 
+            if msg.role == "assistant"
+        )
+        
+        return {
+            "total_messages": len(self.conversation_history),
+            "user_messages": sum(1 for msg in self.conversation_history if msg.role == "user"),
+            "assistant_messages": sum(1 for msg in self.conversation_history if msg.role == "assistant"),
+            "estimated_tokens": total_tokens,
+            "cache_size": len(self.cache),
+            "available_providers": self.get_available_providers(),
+            "available_tools": [t.value for t in self.tools.keys()]
+        }
+    
+    def is_available(self) -> bool:
+        """Check if AI is available"""
+        return len(self.clients) > 0
+    
+    def cleanup(self):
+        """Cleanup resources"""
+        logger.info("Cleaning up AI Assistant...")
+        
+        # Save cache
+        if self.config.enable_cache:
+            self._save_cache()
+        
+        # Stop background threads
+        self.cache_save_event.set()
+        
+        logger.info("AI Assistant cleanup complete")
+
+
+class RateLimiter:
+    """Simple rate limiter for API calls"""
+    
+    def __init__(self, max_requests_per_minute: int):
+        self.max_requests = max_requests_per_minute
+        self.requests = []
+        self.lock = threading.Lock()
+    
+    def wait(self):
+        """Wait if rate limit would be exceeded"""
+        with self.lock:
+            now = time.time()
+            
+            # Remove old requests
+            self.requests = [req_time for req_time in self.requests 
+                           if now - req_time < 60]
+            
+            # Check if we can make a request
+            if len(self.requests) >= self.max_requests:
+                # Calculate wait time
+                oldest = self.requests[0]
+                wait_time = 60 - (now - oldest)
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                
+                # Update list after waiting
+                self.requests = [req_time for req_time in self.requests 
+                               if now + wait_time - req_time < 60]
+            
+            # Add current request
+            self.requests.append(time.time())
+
+
+# Utility functions
+def create_default_assistant() -> AIAssistant:
+    """Create AI assistant with default configuration"""
+    config = AIConfig(
+        openai_api_key=os.environ.get('OPENAI_API_KEY'),
+        anthropic_api_key=os.environ.get('ANTHROPIC_API_KEY'),
+        google_api_key=os.environ.get('GOOGLE_AI_API_KEY'),
+        default_provider=AIProvider.OPENAI,
+        enabled_tools=[AITool.CALCULATOR, AITool.WEB_SEARCH, AITool.FILE_READER]
+    )
+    
+    return AIAssistant(config)
+
+
+def test_assistant():
+    """Test function for the AI assistant"""
+    assistant = create_default_assistant()
+    
+    if not assistant.is_available():
+        print("⚠️ No AI providers available. Please set API keys.")
+        print("Set environment variables:")
+        print("  - OPENAI_API_KEY")
+        print("  - ANTHROPIC_API_KEY (optional)")
+        print("  - GOOGLE_AI_API_KEY (optional)")
+        return
+    
+    print(f"✅ AI Assistant ready with providers: {assistant.get_available_providers()}")
+    
+    # Test conversation
+    test_queries = [
+        "What's 15 * 27?",
+        "Who won the Nobel Prize in Physics in 2023?",
+        "Write a Python function to calculate Fibonacci numbers"
+    ]
+    
+    for query in test_queries:
+        print(f"\n🧠 Query: {query}")
+        response = assistant.chat(query)
+        print(f"🤖 Response: {response.content[:200]}...")
+        print(f"   Provider: {response.provider}, Tokens: {response.tokens_used}")
+    
+    # Show stats
+    stats = assistant.get_stats()
+    print(f"\n📊 Stats: {stats}")
+    
+    assistant.cleanup()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    test_assistant()
+
