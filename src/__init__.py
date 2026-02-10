@@ -384,5 +384,176 @@ class SpeechRecognizer:
         }
         
         self.command_history.append(entry)
+              # Trim history if too large
+        if len(self.command_history) > self.config.command_history_size:
+            self.command_history = self.command_history[-self.config.command_history_size:]
+    
+    def get_command_history(self, limit: int = 10) -> List[Dict]:
+        """Get recent command history"""
+        return self.command_history[-limit:] if self.command_history else []
+    
+    def get_stats(self) -> Dict:
+        """Get recognition statistics"""
+        current_time = time.time()
+        self.stats["uptime_seconds"] = current_time - self.stats["start_time"]
+        self.stats["current_mode"] = self.config.recognition_mode.value
+        self.stats["wake_word"] = self.active_wake_word
+        return self.stats.copy()
+    
+    def change_wake_word(self, new_wake_word: str):
+        """Change the active wake word"""
+        old_word = self.active_wake_word
+        self.active_wake_word = new_wake_word.lower()
+        self.config.wake_word = new_wake_word.lower()
+        self.wake_words = self._generate_wake_words(new_wake_word)
         
+        logger.info(f"Wake word changed: '{old_word}' → '{new_wake_word}'")
+        print(f"🔁 Wake word changed to: '{new_wake_word}'")
+        
+        return True
+    
+    def change_recognition_mode(self, mode: RecognitionMode):
+        """Change recognition mode"""
+        self.config.recognition_mode = mode
+        logger.info(f"Recognition mode changed to: {mode.value}")
+        print(f"🔄 Mode changed to: {mode.value}")
+        
+        return True
+    
+    def export_history(self, filename: str = None):
+        """Export command history to JSON file"""
+        if not filename:
+            filename = f"speech_history_{self.session_id}.json"
+        
+        try:
+            data = {
+                "session_id": self.session_id,
+                "config": {
+                    "wake_word": self.config.wake_word,
+                    "mode": self.config.recognition_mode.value,
+                    "language": self.config.language
+                },
+                "stats": self.get_stats(),
+                "history": self.command_history
+            }
+            
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            logger.info(f"History exported to: {filename}")
+            print(f"💾 History exported to: {filename}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to export history: {e}")
+            return False
+    
+    def get_available_microphones(self) -> List[str]:
+        """Get list of available microphones"""
+        if not self.speech_lib_available:
+            return []
+        
+        try:
+            import speech_recognition as sr
+            return sr.Microphone.list_microphone_names()
+        except:
+            return []
+    
+    def change_microphone(self, device_index: int) -> bool:
+        """Change to a different microphone device"""
+        try:
+            self.microphone = self.speech_lib.Microphone(device_index=device_index)
+            logger.info(f"Changed to microphone device: {device_index}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to change microphone: {e}")
+            return False
+    
+    def cleanup(self):
+        """Cleanup resources"""
+        logger.info("Cleaning up speech recognizer...")
+        self.stop_listening()
+        
+        # Wait for threads to finish
+        if hasattr(self, 'listening_thread'):
+            self.listening_thread.join(timeout=2)
+        
+        if hasattr(self, 'processing_thread'):
+            self.processing_thread.join(timeout=2)
+        
+        # Export history on cleanup if configured
+        if self.config.save_audio_logs and self.command_history:
+            self.export_history()
+        
+        logger.info("Speech recognizer cleanup complete")
+
+
+# Example usage and helper functions
+def create_speech_recognizer(
+    wake_word: str = "jarvis",
+    mode: str = "wake_word_only",
+    language: str = "en-US",
+    on_command: Callable = None
+) -> SpeechRecognizer:
+    """
+    Helper function to create a speech recognizer with common configuration
+    """
+    config = SpeechConfig(
+        wake_word=wake_word,
+        recognition_mode=RecognitionMode(mode),
+        language=language,
+        save_audio_logs=True,
+        audio_log_path="./speech_logs"
+    )
+    
+    return SpeechRecognizer(config, on_command)
+
+
+def print_available_devices():
+    """Print available audio devices"""
+    try:
+        import speech_recognition as sr
+        print("\nAvailable audio devices:")
+        for i, name in enumerate(sr.Microphone.list_microphone_names()):
+            print(f"  [{i}] {name}")
+    except Exception as e:
+        print(f"Could not list audio devices: {e}")
+
+
+if __name__ == "__main__":
+    # Example usage
+    logging.basicConfig(level=logging.INFO)
+    
+    def handle_command(command: str):
+        print(f"\n🎯 Processing command: {command}")
+        # Add your command processing logic here
+    
+    # Create recognizer
+    recognizer = create_speech_recognizer(
+        wake_word="computer",
+        mode="wake_word_only",
+        on_command=handle_command
+    )
+    
+    # Show available devices
+    print_available_devices()
+    
+    try:
+        recognizer.start_listening()
+        
+        # Keep main thread alive
+        while True:
+            time.sleep(1)
+            
+            # Optional: Print stats every 30 seconds
+            if int(time.time()) % 30 == 0:
+                stats = recognizer.get_stats()
+                print(f"\n📊 Stats: {stats['wake_word_detections']} wake words, "
+                      f"{stats['commands_processed']} commands")
+    
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down...")
+    finally:
+        recognizer.cleanup()
   
+
