@@ -6,6 +6,14 @@ RUN THIS FILE TO START JARVIS!
 
 import os
 import sys
+import io
+
+# Set UTF-8 encoding for Windows
+if sys.platform == 'win32':
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import logging
 import traceback
 from pathlib import Path
