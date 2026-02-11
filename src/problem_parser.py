@@ -393,4 +393,212 @@ class ProblemParser:
         # Look for error patterns
         error_sentences = re.findall(r'[^.!?]*(?:error|exception|crash|fail|bug)[^.!?]*[.!?]', text, re.IGNORECASE)
         errors.extend([s.strip() for s in error_sentences if len(s.strip()) > 10])
+        # Extract stack traces
+        stack_trace_patterns = [
+            r'(?:Traceback.*?\n)(.*?)(?=\n\n|\Z)',
+            r'(?:at\s+[\w\.$]+\(.*?\).*?\n)+',
+            r'(?:[\w\.]+:\d+:in\s+.*?\n)+',
+        ]
+
+        for pattern in stack_trace_patterns:
+            matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+            errors.extend([match.strip() for match in matches if match.strip()])
+
+        return list(set(errors))
+
+    def _classify_error(self, text: str) -> Optional[str]:
+        """Classify the type of error."""
+        scores = {}
+
+        for error_type, pattern in self.error_patterns.items():
+            matches = pattern.findall(text)
+            if matches:
+                scores[error_type] = scores.get(error_type, 0) + len(matches)
+
+        if scores:
+            return max(scores, key=scores.get)
+
+        return None
+
+    def _extract_functionality(self, text: str) -> Optional[str]:
+        """Extract what the code is supposed to do."""
+        # Look for sentences describing functionality
+        sentences = re.split(r'[.!?]+', text)
+
+        functionality_indicators = [
+            'trying to', 'want to', 'need to', 'should', 'must', 'will',
+            'create', 'build', 'make', 'implement', 'develop', 'design',
+            'calculate', 'compute', 'process', 'handle', 'manage',
+            'display', 'show', 'render', 'generate', 'produce',
+            'read', 'write', 'parse', 'convert', 'transform',
+            'connect', 'fetch', 'download', 'upload', 'send', 'receive',
+            'authenticate', 'validate', 'check', 'verify', 'test',
+        ]
+
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if any(indicator in sentence.lower() for indicator in functionality_indicators):
+                # Remove common problem indicators to get cleaner description
+                cleaned = re.sub(r'(i am|im|i\'m|i have|we have|the code|my code|it should|it will)', '', sentence, flags=re.IGNORECASE)
+                return cleaned.strip()
+
+        return None
+
+    def _extract_constraints(self, text: str) -> List[str]:
+        """Extract constraints and requirements."""
+        constraints = []
+
+        # Version constraints
+        version_matches = self._extract_versions(text)
+        for lib, version in version_matches.items():
+            if lib:
+                constraints.append(f"{lib} version: {version}")
+            else:
+                constraints.append(f"Version: {version}")
+
+        # Platform constraints
+        os_detected = self._detect_os(text)
+        if os_detected:
+            constraints.append(f"Platform: {os_detected}")
+
+        # Time constraints
+        time_constraints = re.findall(r'\b(within|in|under|less than)\s+(\d+)\s*(ms|milliseconds?|seconds?|minutes?|hours?)\b', text, re.IGNORECASE)
+        for constraint in time_constraints:
+            constraints.append(f"Time constraint: {constraint[1]} {constraint[2]}")
+
+        # Memory constraints
+        memory_constraints = re.findall(r'\b(within|under|less than)\s+(\d+)\s*(kb|mb|gb)\s+(memory|ram)\b', text, re.IGNORECASE)
+        for constraint in memory_constraints:
+            constraints.append(f"Memory constraint: {constraint[1]} {constraint[2]}")
+
+        # Other common constraints
+        if 'concurrent' in text.lower() or 'parallel' in text.lower():
+            constraints.append('Concurrency/parallelism required')
+        if 'realtime' in text.lower() or 'real-time' in text.lower():
+            constraints.append('Real-time processing required')
+        if 'cross-platform' in text.lower():
+            constraints.append('Cross-platform compatibility required')
+        if 'backward compatible' in text.lower() or 'backwards compatible' in text.lower():
+            constraints.append('Backward compatibility required')
+
+        return list(set(constraints))
+
+    def _detect_problem_domain(self, text: str) -> Optional[str]:
+        """Detect the problem domain."""
+        scores = {}
+
+        for domain, pattern in self.domain_patterns.items():
+            matches = len(pattern.findall(text))
+            if matches > 0:
+                scores[domain] = matches
+
+        if scores:
+            return max(scores, key=scores.get)
+
+        return ProblemDomain.OTHER.value
+
+    def _estimate_complexity(self, text: str) -> Optional[str]:
+        """Estimate the complexity level of the problem."""
+        scores = {}
+
+        for level, pattern in self.complexity_patterns.items():
+            matches = len(pattern.findall(text))
+            if matches > 0:
+                scores[level] = matches
+
+        # Check for complexity indicators in code snippets
+        code_snippets = self._extract_code_snippets(text)
+        for snippet in code_snippets:
+            if len(snippet.split('\n')) > 50:
+                scores['advanced'] = scores.get('advanced', 0) + 1
+            if 'class' in snippet and 'def' in snippet and len(snippet) > 1000:
+                scores['expert'] = scores.get('expert', 0) + 1
+
+        if scores:
+            return max(scores, key=scores.get)
+
+        return ComplexityLevel.BEGINNER.value
+
+    def _extract_keywords(self, text: str) -> List[str]:
+        """Extract important keywords from the description."""
+        keywords = []
+
+        # Remove common stop words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                     'with', 'by', 'from', 'as', 'of', 'it', 'this', 'that', 'is', 'are',
+                     'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had'}
+
+        # Extract words with specific patterns
+        word_patterns = [
+            r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b',  # Proper nouns
+            r'\b[a-z]{4,}\b',  # Words with 4+ letters
+            r'\b[A-Z]{2,}\b',  # Acronyms
+        ]
+
+        for pattern in word_patterns:
+            matches = re.findall(pattern, text)
+            keywords.extend([match.lower() for match in matches if match.lower() not in stop_words])
+
+        # Remove duplicates and sort
+        keywords = list(set(keywords))
+        keywords.sort(key=lambda x: len(x), reverse=True)
+
+        # Limit to top 20 keywords
+        return keywords[:20]
+
+    def _generate_suggested_tags(self, analysis: ProblemAnalysis) -> List[str]:
+        """Generate suggested tags for the problem."""
+        tags = []
+
+        if analysis.language:
+            tags.append(analysis.language)
+
+        if analysis.error_type:
+            tags.append(f"error:{analysis.error_type}")
+
+        if analysis.problem_domain:
+            tags.append(analysis.problem_domain)
+
+        if analysis.complexity:
+            tags.append(f"complexity:{analysis.complexity}")
+
+        # Add library tags
+        for lib in analysis.libraries[:5]:  # Limit to top 5 libraries
+            tags.append(lib)
+
+        # Add common problem type tags
+        if analysis.functionality:
+            functionality_lower = analysis.functionality.lower()
+            if any(word in functionality_lower for word in ['api', 'rest', 'endpoint']):
+                tags.append('api-development')
+            if any(word in functionality_lower for word in ['database', 'sql', 'query']):
+                tags.append('database')
+            if any(word in functionality_lower for word in ['test', 'unit test', 'testing']):
+                tags.append('testing')
+
+        return list(set(tags))
+
+    def _estimate_solution_time(self, analysis: ProblemAnalysis) -> Optional[int]:
+        """Estimate solution time in minutes."""
+        base_time = 30  # Base time in minutes
+
+        # Adjust based on complexity
+        complexity_multipliers = {
+            ComplexityLevel.BEGINNER.value: 0.5,
+            ComplexityLevel.INTERMEDIATE.value: 1.0,
+            ComplexityLevel.ADVANCED.value: 2.0,
+            ComplexityLevel.EXPERT.value: 3.0,
+        }
+
+        multiplier = complexity_multipliers.get(analysis.complexity, 1.0)
+        estimated_time = int(base_time * multiplier)
+
+        # Adjust based on number of libraries
+        if analysis.libraries:
+            estimated_time += len(analysis.libraries) * 10
+
+        # Adjust based on constraints
+        if analysis.constraints:
+            estimated_time += len(analysis.constraints) * 5
+
 
