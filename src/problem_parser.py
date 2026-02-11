@@ -600,5 +600,338 @@ class ProblemParser:
         # Adjust based on constraints
         if analysis.constraints:
             estimated_time += len(analysis.constraints) * 5
+        # Adjust based on code snippets
+        if analysis.code_snippets:
+            total_lines = sum(len(snippet.split('\n')) for snippet in analysis.code_snippets)
+            estimated_time += total_lines // 10
 
+        return estimated_time
+
+    def _extract_prerequisites(self, text: str) -> List[str]:
+        """Extract prerequisites and requirements."""
+        prerequisites = []
+
+        # Look for prerequisite patterns
+        prerequisite_patterns = [
+            r'\b(prerequisite|pre-requisite|require|need|must have|should have)\s+(?:to )?([^.!?]+)',
+            r'\b(before|first|prior to)\s+([^.!?]+)',
+            r'\byou(?: \w+)? (need to|should|must) ([^.!?]+)',
+        ]
+
+        for pattern in prerequisite_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    prereq = match[-1].strip()
+                else:
+                    prereq = match.strip()
+                if len(prereq) > 10:  # Only meaningful prerequisites
+                    prerequisites.append(prereq)
+
+        return list(set(prerequisites))
+
+    def _extract_io_formats(self, text: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Extract input/output format specifications."""
+        expected_output = None
+        input_format = None
+        output_format = None
+
+        # Look for output descriptions
+        output_patterns = [
+            r'\b(expected|desired|wanted|should|must)\s+(?:output|result|return|print|display|show)\s+([^.!?]+)',
+            r'\boutput\s+(?:should|must|will)\s+be\s+([^.!?]+)',
+            r'\b(?:returns?|prints?|displays?|shows?)\s+([^.!?]+)',
+        ]
+
+        for pattern in output_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                expected_output = match.group(match.lastindex or 1).strip()
+                break
+
+        # Look for input format
+        input_patterns = [
+            r'\binput\s+(?:format|should|must|will)\s+be\s+([^.!?]+)',
+            r'\btakes?\s+(?:an?|the)\s+([^.!?]+)\s+(?:as\s+)?input',
+            r'\baccepts?\s+([^.!?]+)\s+(?:as\s+)?(?:input|parameter|argument)',
+        ]
+
+        for pattern in input_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                input_format = match.group(match.lastindex or 1).strip()
+                break
+
+        # Look for output format
+        format_patterns = [
+            r'\boutput\s+format\s+(?:should|must|will)\s+be\s+([^.!?]+)',
+            r'\bformat\s+of\s+(?:the\s+)?output\s+([^.!?]+)',
+            r'\boutput\s+should\s+be\s+formatted\s+as\s+([^.!?]+)',
+        ]
+
+        for pattern in format_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                output_format = match.group(match.lastindex or 1).strip()
+                break
+
+        return expected_output, input_format, output_format
+
+    def _extract_test_cases(self, text: str) -> List[Dict[str, str]]:
+        """Extract test cases from the description."""
+        test_cases = []
+
+        # Look for examples with input/output
+        example_patterns = [
+            r'(?:example|e\.g\.|for\s+example|sample)[\s:]+(?:input|in|given)[\s:]+(.+?)(?:output|out|returns?|prints?|should\s+be)[\s:]+(.+?)(?=\n\n|$|Example|Sample)',
+            r'input:\s*(.+?)\s*output:\s*(.+?)(?=\n\n|$|Example|Sample)',
+            r'in:\s*(.+?)\s*out:\s*(.+?)(?=\n\n|$|Example|Sample)',
+            r'>>>\s*(.+?)\n(.+?)(?=\n\n|$|>>>)',
+        ]
+
+        for pattern in example_patterns:
+            matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+            for match in matches:
+                test_case = {
+                    'input': match[0].strip(),
+                    'expected_output': match[1].strip()
+                }
+                test_cases.append(test_case)
+
+        # Limit to top 10 test cases
+        return test_cases[:10]
+
+    def _extract_performance_requirements(self, text: str) -> List[str]:
+        """Extract performance requirements."""
+        requirements = []
+
+        for req_type, pattern in self.performance_patterns.items():
+            matches = pattern.findall(text)
+            for match in matches:
+                if isinstance(match, tuple):
+                    requirement = ' '.join(str(x) for x in match if x)
+                else:
+                    requirement = match
+                requirements.append(f"{req_type}: {requirement}")
+
+        return list(set(requirements))
+
+    def _extract_security_requirements(self, text: str) -> List[str]:
+        """Extract security requirements."""
+        requirements = []
+
+        security_patterns = [
+            (r'\b(authenticate|authorize|login|logout|sign[ -]in|sign[ -]out)\b', 'authentication'),
+            (r'\b(encrypt|decrypt|cipher|hash|salt|sha|md5|aes|rsa)\b', 'encryption'),
+            (r'\b(sql\s+injection|xss|csrf|sanitize|validate|escape)\b', 'input validation'),
+            (r'\b(https?|ssl|tls|certificate)\b', 'secure communication'),
+            (r'\b(password|token|jwt|oauth|api[ -]key)\b', 'credentials'),
+            (r'\b(permission|role|access[ -]control|rbac|privilege)\b', 'authorization'),
+        ]
+
+        for pattern, req_type in security_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                requirements.append(req_type)
+
+        return list(set(requirements))
+
+    def _extract_versions(self, text: str) -> Dict[str, str]:
+        """Extract version information."""
+        version_info = {}
+
+        for pattern in self.version_patterns:
+            matches = pattern.findall(text)
+            for match in matches:
+                if len(match) >= 3:
+                    lib = match[0].strip().lower() if match[0] else 'unknown'
+                    version = match[-1].strip()
+                    version_info[lib] = version
+                elif len(match) == 2:
+                    version_info['unknown'] = match[-1].strip()
+
+        return version_info
+
+    def _detect_os(self, text: str) -> Optional[str]:
+        """Detect the operating system."""
+        for os_name, pattern in self.os_patterns.items():
+            if pattern.search(text):
+                return os_name
+        return None
+
+    def _detect_ide(self, text: str) -> Optional[str]:
+        """Detect the IDE or text editor."""
+        match = self.ide_patterns.search(text)
+        if match:
+            return match.group(0).strip()
+        return None
+
+    def _check_clarification_needed(self, text: str, analysis: ProblemAnalysis) -> Tuple[bool, List[str]]:
+        """Determine if clarification questions are needed."""
+        questions = []
+
+        # Core checks
+        if not analysis.language:
+            questions.append("What programming language are you using?")
+
+        if not analysis.error_messages and ('error' in text.lower() or 'bug' in text.lower() or 'issue' in text.lower()):
+            questions.append("Can you provide the exact error message or stack trace you're seeing?")
+
+        if not analysis.functionality:
+            questions.append("What exactly are you trying to accomplish with this code? Please describe the expected behavior.")
+
+        # Enhanced checks
+        if analysis.error_type == 'dependency' and not analysis.libraries:
+            questions.append("What libraries or packages are you trying to install or import?")
+
+        if analysis.code_snippets and not analysis.error_messages:
+            questions.append("What specific problem are you experiencing with this code?")
+
+        if 'version' in text.lower() and not analysis.version_info:
+            questions.append("What specific version(s) of the language/framework are you using?")
+
+        if self.ide_patterns.search(text) and not analysis.ide_info:
+            questions.append("What IDE or text editor are you using?")
+
+        if analysis.constraints and not analysis.operating_system:
+            questions.append("What operating system are you developing on?")
+
+        # Check for ambiguous references
+        ambiguous_pronouns = re.findall(r'\b(it|they|them|this|that|these|those)\b', text, re.IGNORECASE)
+        if len(ambiguous_pronouns) > 3 and not analysis.functionality:
+            questions.append("What does 'it' or 'this' refer to in your description?")
+
+        # Check for incomplete error descriptions
+        if 'something' in text.lower() or 'some kind' in text.lower():
+            questions.append("Can you be more specific about the error or issue you're facing?")
+
+        # Check for missing context
+        if len(text.split()) < 10:
+            questions.append("Can you provide more details about your problem?")
+            questions.append("What have you tried so far?")
+
+        # Check for sample input/output needs
+        if analysis.io_patterns['input'].search(text) and not analysis.input_format:
+            questions.append("What is the expected format of the input?")
+
+        if analysis.io_patterns['output'].search(text) and not analysis.expected_output:
+            questions.append("What should the expected output or result be?")
+
+        return len(questions) > 0, questions
+
+    def _calculate_confidence(self, analysis: ProblemAnalysis) -> float:
+        """Calculate confidence score for the analysis."""
+        score = 0.0
+
+        # Language detection (0.15)
+        if analysis.language:
+            score += 0.15
+
+        # Libraries (0.10)
+        if analysis.libraries:
+            score += min(len(analysis.libraries) * 0.02, 0.10)
+
+        # Error messages (0.15)
+        if analysis.error_messages:
+            score += min(len(analysis.error_messages) * 0.05, 0.15)
+
+        # Functionality (0.15)
+        if analysis.functionality:
+            score += 0.15
+
+        # Error type (0.10)
+        if analysis.error_type:
+            score += 0.10
+
+        # Problem domain (0.10)
+        if analysis.problem_domain and analysis.problem_domain != ProblemDomain.OTHER.value:
+            score += 0.10
+
+        # Code snippets (0.10)
+        if analysis.code_snippets:
+            score += min(len(analysis.code_snippets) * 0.03, 0.10)
+
+        # Constraints (0.05)
+        if analysis.constraints:
+            score += min(len(analysis.constraints) * 0.01, 0.05)
+
+        # I/O formats (0.10)
+        if analysis.expected_output or analysis.input_format or analysis.output_format:
+            score += 0.10
+
+        # Confidence penalty for unclear descriptions
+        if analysis.needs_clarification:
+            penalty = len(analysis.clarification_questions) * 0.05
+            score -= min(penalty, 0.25)  # Maximum 25% penalty
+
+        return max(min(score, 1.0), 0.0)  # Clamp between 0 and 1
+
+    def analyze_problem_batch(self, descriptions: List[str]) -> List[ProblemAnalysis]:
+        """Analyze a batch of problem descriptions."""
+        analyses = []
+        for description in descriptions:
+            try:
+                analysis = self.parse_problem(description)
+                analyses.append(analysis)
+            except Exception as e:
+                logger.error(f"Error parsing description: {str(e)}")
+                analyses.append(ProblemAnalysis(needs_clarification=True, 
+                                              clarification_questions=["Unable to parse problem description."]))
+        return analyses
+
+    def get_analysis_summary(self, analysis: ProblemAnalysis) -> str:
+        """Get a human-readable summary of the analysis."""
+        summary = []
+        summary.append("=" * 50)
+        summary.append("PROBLEM ANALYSIS SUMMARY")
+        summary.append("=" * 50)
+
+        if analysis.language:
+            summary.append(f"📋 Language: {analysis.language}")
+        if analysis.problem_domain:
+            summary.append(f"🎯 Domain: {analysis.problem_domain}")
+        if analysis.complexity:
+            summary.append(f"📊 Complexity: {analysis.complexity}")
+        if analysis.estimated_time:
+            summary.append(f"⏱️  Est. Time: {analysis.estimated_time} minutes")
+
+        summary.append(f"\n📈 Confidence: {analysis.confidence:.1%}")
+
+        if analysis.error_type:
+            summary.append(f"\n❌ Error Type: {analysis.error_type.upper()}")
+        if analysis.error_messages:
+            summary.append(f"\n🔴 Error Messages ({len(analysis.error_messages)}):")
+            for error in analysis.error_messages[:3]:
+                summary.append(f"   • {error[:100]}...")
+
+        if analysis.functionality:
+            summary.append(f"\n✅ Expected Functionality:")
+            summary.append(f"   {analysis.functionality[:200]}")
+
+        if analysis.libraries:
+            summary.append(f"\n📚 Libraries/Frameworks:")
+            summary.append(f"   {', '.join(analysis.libraries[:10])}")
+
+        if analysis.constraints:
+            summary.append(f"\n⚠️  Constraints:")
+            for constraint in analysis.constraints[:5]:
+                summary.append(f"   • {constraint}")
+
+        if analysis.suggested_tags:
+            summary.append(f"\n🏷️  Suggested Tags:")
+            summary.append(f"   {', '.join(analysis.suggested_tags[:10])}")
+
+        if analysis.needs_clarification:
+            summary.append(f"\n❓ Clarification Needed:")
+            for question in analysis.clarification_questions:
+                summary.append(f"   • {question}")
+
+        summary.append("\n" + "=" * 50)
+        return "\n".join(summary)
+
+
+# Convenience function for quick parsing
+def parse_problem(description: str) -> ProblemAnalysis:
+    """Convenience function to quickly parse a problem description."""
+    parser = ProblemParser()
+    return parser.parse_problem(description)
 
