@@ -584,7 +584,231 @@ class SafetyChecker:
     def _check_environment_specific(self, code: str, environment: str) -> List[SafetyIssue]:
         """Environment-specific safety checks."""
         issues = []
+                    # Production-specific checks
+            if 'print(' in code or 'console.log(' in code:
+                issues.append(SafetyIssue(
+                    category=IssueCategory.BEST_PRACTICE,
+                    severity=SeverityLevel.LOW,
+                    message="Debug print statement in production code",
+                    suggestion="Remove or replace with proper logging"
+                ))
         
+        elif environment == 'web':
+            # Web-specific checks
+            if 'input' in code and 'htmlspecialchars' not in code:
+                issues.append(SafetyIssue(
+                    category=IssueCategory.CODE_INJECTION,
+                    severity=SeverityLevel.HIGH,
+                    message="Missing XSS protection",
+                    suggestion="Escape output with htmlspecialchars() or template engine",
+                    cwe_id="CWE-79"
+                ))
+        
+        return issues
+
+    def _get_code_snippet(self, code: str, line_number: int, context_lines: int = 2) -> str:
+        """Extract code snippet around a specific line."""
+        lines = code.split('\n')
+        start = max(0, line_number - context_lines - 1)
+        end = min(len(lines), line_number + context_lines)
+        
+        snippet = []
+        for i in range(start, end):
+            prefix = '-> ' if i == line_number - 1 else '   '
+            snippet.append(f"{prefix}{i+1}: {lines[i]}")
+        
+        return '\n'.join(snippet)
+
+    def _get_suggestion_for_pattern(self, pattern: str) -> str:
+        """Get remediation suggestion for a dangerous pattern."""
+        suggestions = {
+            'os.system': 'Use subprocess.run() with argument lists instead of shell=True',
+            'eval': 'Avoid eval() - use safer alternatives like ast.literal_eval() for simple data',
+            'exec': 'Avoid exec() - use modules and functions instead',
+            'pickle': 'Use JSON or other serialization formats for untrusted data',
+            'yaml.load': 'Use yaml.safe_load() instead',
+            'input.*exec': 'Never pass user input to exec()',
+        }
+        
+        for key, suggestion in suggestions.items():
+            if key in pattern.lower():
+                return suggestion
+        
+        return "Replace with a secure alternative and validate all inputs"
+
+    def _get_cwe_for_pattern(self, pattern: str) -> Optional[str]:
+        """Get CWE ID for a dangerous pattern."""
+        cwe_mapping = {
+            'os.system': 'CWE-78',
+            'subprocess': 'CWE-78',
+            'eval': 'CWE-95',
+            'exec': 'CWE-94',
+            'pickle': 'CWE-502',
+            'yaml.load': 'CWE-502',
+            'marshal': 'CWE-502',
+            'input.*exec': 'CWE-94',
+            'strcpy': 'CWE-120',
+            'printf.*%n': 'CWE-134',
+        }
+        
+        for key, cwe_id in cwe_mapping.items():
+            if key in pattern.lower():
+                return cwe_id
+        
+        return None
+
+    def _deduplicate_issues(self, issues: List[SafetyIssue]) -> List[SafetyIssue]:
+        """Remove duplicate issues based on message and line number."""
+        seen = set()
+        unique_issues = []
+        
+        for issue in issues:
+            key = (issue.message, issue.line_number)
+            if key not in seen:
+                seen.add(key)
+                unique_issues.append(issue)
+        
+        return unique_issues
+
+    def sanitize_code(
+        self, 
+        code: str, 
+        language: str,
+        aggressive: bool = False
+    ) -> Tuple[str, List[str]]:
+        """
+        Attempt to sanitize potentially unsafe code with tracking.
+
+        Args:
+            code: Original code
+            language: Programming language
+            aggressive: Remove all suspicious patterns (may break functionality)
+
+        Returns:
+            Tuple of (sanitized_code, list_of_removed_patterns)
+        """
+        removed_patterns = []
+        sanitized = code
+        
+        if language.lower() == 'python':
+            # Remove dangerous imports
+            for imp in ['socket', 'ftplib', 'smtplib', 'telnetlib']:
+                pattern = rf'^.*(import\s+{imp}|from\s+{imp}\s+import).*$'
+                if re.search(pattern, sanitized, re.MULTILINE):
+                    sanitized = re.sub(pattern, f'# SAFETY: Removed dangerous import: {imp}', sanitized, flags=re.MULTILINE)
+                    removed_patterns.append(f"Removed import: {imp}")
+            
+            # Replace dangerous functions
+            dangerous_funcs = {
+                'eval': 'ast.literal_eval',  # Note: only works for literals
+                'exec': '# EXEC_REMOVED',
+                'os.system': 'subprocess.run',
+            }
+            
+            for old, new in dangerous_funcs.items():
+                if old in sanitized:
+                    if aggressive:
+                        sanitized = sanitized.replace(old, new)
+                        removed_patterns.append(f"Replaced {old}() with {new}")
+                    else:
+                        sanitized = sanitized.replace(old, f'# WARNING: {old}() used here\n            #{old}')
+                        removed_patterns.append(f"Commented out {old}()")
+        
+        return sanitized, removed_patterns
+
+    def generate_safety_report(self, issues: List[SafetyIssue]) -> Dict:
+        """Generate a comprehensive safety report."""
+        report = {
+            'summary': {
+                'total_issues': len(issues),
+                'by_severity': {},
+                'by_category': {},
+                'critical_count': 0,
+                'high_count': 0,
+                'medium_count': 0,
+                'low_count': 0,
+                'info_count': 0,
+            },
+            'issues': [],
+            'recommendations': [],
+            'generated_at': datetime.now().isoformat(),
+        }
+        
+        # Count by severity
+        for issue in issues:
+            severity = issue.severity.value
+            report['summary']['by_severity'][severity] = report['summary']['by_severity'].get(severity, 0) + 1
+            report['summary'][f'{severity}_count'] = report['summary'].get(f'{severity}_count', 0) + 1
+            
+            # Count by category
+            category = issue.category.value
+            report['summary']['by_category'][category] = report['summary']['by_category'].get(category, 0) + 1
+            
+            # Add issue details
+            report['issues'].append({
+                'severity': issue.severity.value,
+                'category': issue.category.value,
+                'message': issue.message,
+                'line_number': issue.line_number,
+                'suggestion': issue.suggestion,
+                'cwe_id': issue.cwe_id,
+            })
+            
+            # Add unique recommendations
+            if issue.suggestion and issue.suggestion not in report['recommendations']:
+                report['recommendations'].append(issue.suggestion)
+        
+        return report
+
+    def generate_safety_warning(self, issues: List[SafetyIssue]) -> str:
+        """Generate a formatted safety warning message."""
+        if not issues:
+            return ""
+        
+        # Group issues by severity
+        critical = [i for i in issues if i.severity == SeverityLevel.CRITICAL]
+        high = [i for i in issues if i.severity == SeverityLevel.HIGH]
+        medium = [i for i in issues if i.severity == SeverityLevel.MEDIUM]
+        low = [i for i in issues if i.severity == SeverityLevel.LOW]
+        
+        warning = []
+        warning.append("⚠️  SAFETY WARNING:")
+        warning.append("=" * 60)
+        
+        if critical:
+            warning.append(f"\n🔴 CRITICAL ISSUES ({len(critical)}):")
+            warning.append("These issues MUST be fixed before deployment:")
+            for issue in critical[:5]:  # Show top 5
+                line_info = f" (line {issue.line_number})" if issue.line_number else ""
+                warning.append(f"  • [{issue.category.value}] {issue.message}{line_info}")
+                if issue.suggestion:
+                    warning.append(f"    Suggestion: {issue.suggestion}")
+        
+        if high:
+            warning.append(f"\n🟠 HIGH PRIORITY ({len(high)}):")
+            for issue in high[:5]:
+                line_info = f" (line {issue.line_number})" if issue.line_number else ""
+                warning.append(f"  • {issue.message}{line_info}")
+        
+        if medium:
+            warning.append(f"\n🟡 MEDIUM PRIORITY ({len(medium)}):")
+            for issue in medium[:5]:
+                warning.append(f"  • {issue.message}")
+        
+        warning.append("\n📋 RECOMMENDATIONS:")
+        recommendations = list(set([i.suggestion for i in issues[:10] if i.suggestion]))
+        for i, rec in enumerate(recommendations[:5], 1):
+            warning.append(f"  {i}. {rec}")
+        
+        warning.append("\n⚠️  Please review the code carefully before execution.")
+        warning.append("Use this code only in a safe, isolated environment.")
+        
+        return '\n'.join(warning)
+
+    def is_whitelisted(self, code: str, language: str) -> bool:
+        """Check if code is whitelisted for certain operations."""
+        # Add whitelist logic here
+        return False
         if environment == 'production':
 
 
