@@ -238,4 +238,228 @@ class SafetyChecker:
                     suggestion=self._get_suggestion_for_pattern(match.group()),
                     cwe_id=self._get_cwe_for_pattern(match.group())
                 ))
+        # Language-specific AST analysis
+        if self.enable_ast_analysis and language.lower() == 'python':
+            issues.extend(self._analyze_python_ast(code))
+
+        # Language-specific checks
+        if language.lower() in self.language_checkers:
+            issues.extend(self.language_checkers[language.lower()](code, context))
+
+        # Secret detection
+        issues.extend(self._detect_hardcoded_secrets(code))
+
+        # Dependency analysis
+        issues.extend(self._analyze_dependencies(code, language))
+
+        # Environment-specific checks
+        if context.get('environment'):
+            issues.extend(self._check_environment_specific(code, context['environment']))
+
+        # Remove duplicates
+        issues = self._deduplicate_issues(issues)
+
+        # Determine if safe based on severity
+        critical_issues = [i for i in issues if i.severity in [SeverityLevel.CRITICAL, SeverityLevel.HIGH]]
+        is_safe = len(critical_issues) == 0
+
+        if issues:
+            logger.warning(f"Found {len(issues)} safety issues in {language} code")
+
+        if detailed:
+            return is_safe, issues
+        else:
+            # Return simplified issues for backward compatibility
+            simplified_issues = [f"[{i.severity.value}] {i.message}" for i in issues]
+            return is_safe, simplified_issues
+
+    def _analyze_python_ast(self, code: str) -> List[SafetyIssue]:
+        """Perform AST analysis on Python code."""
+        issues = []
+        
+        try:
+            tree = ast.parse(code)
+            
+            for node in ast.walk(tree):
+                # Check for try-except without specific exceptions
+                if isinstance(node, ast.Try):
+                    for handler in node.handlers:
+                        if handler.type is None:
+                            issues.append(SafetyIssue(
+                                category=IssueCategory.BEST_PRACTICE,
+                                severity=SeverityLevel.MEDIUM,
+                                message="Bare except clause catches all exceptions",
+                                line_number=handler.lineno,
+                                code_snippet=self._get_code_snippet(code, handler.lineno),
+                                suggestion="Specify specific exceptions to catch"
+                            ))
+                
+                # Check for mutable default arguments
+                if isinstance(node, ast.FunctionDef):
+                    for arg in node.args.defaults:
+                        if isinstance(arg, (ast.List, ast.Dict, ast.Set)):
+                            issues.append(SafetyIssue(
+                                category=IssueCategory.BEST_PRACTICE,
+                                severity=SeverityLevel.LOW,
+                                message="Mutable default argument detected",
+                                line_number=node.lineno,
+                                code_snippet=self._get_code_snippet(code, node.lineno),
+                                suggestion="Use None as default and initialize inside function"
+                            ))
+                
+                # Check for assert statements in production code
+                if isinstance(node, ast.Assert):
+                    issues.append(SafetyIssue(
+                        category=IssueCategory.BEST_PRACTICE,
+                        severity=SeverityLevel.INFO,
+                        message="Assert statement may be disabled in optimized mode",
+                        line_number=node.lineno,
+                        code_snippet=self._get_code_snippet(code, node.lineno),
+                        suggestion="Use proper error handling instead of asserts"
+                    ))
+                
+                # Check for eval/exec usage
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name):
+                        if node.func.id in ['eval', 'exec', 'compile']:
+                            issues.append(SafetyIssue(
+                                category=IssueCategory.CODE_INJECTION,
+                                severity=SeverityLevel.CRITICAL,
+                                message=f"Use of {node.func.id}() allows arbitrary code execution",
+                                line_number=node.lineno,
+                                code_snippet=self._get_code_snippet(code, node.lineno),
+                                suggestion="Avoid dynamic code execution, use safe alternatives",
+                                cwe_id="CWE-95" if node.func.id == 'eval' else "CWE-94"
+                            ))
+        
+        except SyntaxError as e:
+            issues.append(SafetyIssue(
+                category=IssueCategory.BEST_PRACTICE,
+                severity=SeverityLevel.LOW,
+                message=f"Syntax error in code: {str(e)}",
+                suggestion="Fix syntax errors before deployment"
+            ))
+        
+        return issues
+
+    def _detect_hardcoded_secrets(self, code: str) -> List[SafetyIssue]:
+        """Detect hardcoded secrets, API keys, and credentials."""
+        issues = []
+        
+        patterns = {
+            'api_key': r'api[_-]?key\s*[=:]\s*[\'"]([^\'"]+)[\'"]',
+            'password': r'password\s*[=:]\s*[\'"]([^\'"]+)[\'"]',
+            'aws_key': r'AKIA[0-9A-Z]{16}',
+            'private_key': r'-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----',
+            'oauth_token': r'oauth[_-]?token\s*[=:]\s*[\'"]([^\'"]+)[\'"]',
+            'auth_token': r'auth[_-]?token\s*[=:]\s*[\'"]([^\'"]+)[\'"]',
+            'jwt_token': r'eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*',
+        }
+        
+        for secret_type, pattern in patterns.items():
+            for match in re.finditer(pattern, code, re.IGNORECASE):
+                line_number = code[:match.start()].count('\n') + 1
+                severity = SeverityLevel.HIGH
+                
+                # Check if it's likely a placeholder
+                value = match.group(1) if len(match.groups()) > 0 else match.group()
+                if any(placeholder in value.lower() for placeholder in ['your_', 'xxxx', 'example', 'changeme']):
+                    severity = SeverityLevel.MEDIUM
+                
+                issues.append(SafetyIssue(
+                    category=IssueCategory.HARDCODED_SECRETS,
+                    severity=severity,
+                    message=f"Hardcoded {secret_type.replace('_', ' ')} detected",
+                    line_number=line_number,
+                    code_snippet=self._get_code_snippet(code, line_number),
+                    suggestion="Store secrets in environment variables or secure vault",
+                    cwe_id="CWE-798"
+                ))
+        
+        return issues
+
+    def _analyze_dependencies(self, code: str, language: str) -> List[SafetyIssue]:
+        """Analyze dependencies for security risks."""
+        issues = []
+        
+        if language.lower() == 'python':
+            # Check for outdated/insecure packages
+            import_patterns = [
+                r'^\s*import\s+(\w+)',
+                r'^\s*from\s+(\w+)\s+import',
+            ]
+            
+            for pattern in import_patterns:
+                for match in re.finditer(pattern, code, re.MULTILINE):
+                    module = match.group(1)
+                    if module in self.suspicious_imports:
+                        line_number = code[:match.start()].count('\n') + 1
+                        issues.append(SafetyIssue(
+                            category=IssueCategory.DEPENDENCY_RISK,
+                            severity=SeverityLevel.MEDIUM,
+                            message=f"Suspicious import: {module} - {self.suspicious_imports[module]}",
+                            line_number=line_number,
+                            code_snippet=self._get_code_snippet(code, line_number),
+                            suggestion=f"Review usage of {module} and consider alternatives"
+                        ))
+        
+        return issues
+
+    def _check_java_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """Java-specific safety checks."""
+        issues = []
+        
+        # Check for insecure deserialization
+        if 'ObjectInputStream' in code and 'readObject' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.UNSAFE_FILE_OP,
+                severity=SeverityLevel.HIGH,
+                message="Insecure deserialization detected",
+                suggestion="Use safe deserialization methods or validate input",
+                cwe_id="CWE-502"
+            ))
+        
+        # Check for SQL injection
+        if 'Statement' in code and 'executeQuery' in code:
+            if '?' not in code and 'PreparedStatement' not in code:
+                issues.append(SafetyIssue(
+                    category=IssueCategory.CODE_INJECTION,
+                    severity=SeverityLevel.CRITICAL,
+                    message="Potential SQL injection - use PreparedStatement",
+                    suggestion="Replace Statement with PreparedStatement and use parameterized queries",
+                    cwe_id="CWE-89"
+                ))
+        
+        return issues
+
+    def _check_cpp_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """C/C++-specific safety checks."""
+        issues = []
+        
+        # Check for buffer overflows
+        if 'strcpy' in code or 'strcat' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.MEMORY_SAFETY,
+                severity=SeverityLevel.CRITICAL,
+                message="Unsafe string function detected",
+                suggestion="Use strncpy/strncat or safer alternatives",
+                cwe_id="CWE-120"
+            ))
+        
+        # Check for format string vulnerabilities
+        if 'printf' in code and '%n' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.MEMORY_SAFETY,
+                severity=SeverityLevel.CRITICAL,
+                message="Format string vulnerability",
+                suggestion="Avoid using %n format specifier",
+                cwe_id="CWE-134"
+            ))
+        
+        return issues
+
+    def _check_csharp_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """C#-specific safety checks."""
+        issues = []
+        
 
