@@ -461,5 +461,130 @@ class SafetyChecker:
     def _check_csharp_code(self, code: str, context: Dict) -> List[SafetyIssue]:
         """C#-specific safety checks."""
         issues = []
+                # Check for insecure deserialization
+        if 'BinaryFormatter' in code or 'SoapFormatter' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.UNSAFE_FILE_OP,
+                severity=SeverityLevel.HIGH,
+                message="Insecure deserializer detected",
+                suggestion="Use XmlSerializer or DataContractSerializer with proper validation",
+                cwe_id="CWE-502"
+            ))
         
+        return issues
+
+    def _check_go_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """Go-specific safety checks."""
+        issues = []
+        
+        # Check for goroutine leaks
+        if 'go ' in code and 'sync.WaitGroup' not in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.CONCURRENCY,
+                severity=SeverityLevel.MEDIUM,
+                message="Potential goroutine leak",
+                suggestion="Use WaitGroup or channels to manage goroutine lifecycle"
+            ))
+        
+        return issues
+
+    def _check_rust_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """Rust-specific safety checks."""
+        issues = []
+        
+        # Check for unsafe blocks
+        if 'unsafe {' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.MEMORY_SAFETY,
+                severity=SeverityLevel.MEDIUM,
+                message="Unsafe block detected",
+                suggestion="Minimize unsafe code and verify invariants"
+            ))
+        
+        return issues
+
+    def _check_ruby_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """Ruby-specific safety checks."""
+        issues = []
+        
+        # Check for unsafe YAML loading
+        if 'YAML.load' in code and 'YAML.safe_load' not in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.UNSAFE_FILE_OP,
+                severity=SeverityLevel.HIGH,
+                message="Unsafe YAML loading detected",
+                suggestion="Use YAML.safe_load instead",
+                cwe_id="CWE-502"
+            ))
+        
+        return issues
+
+    def _check_php_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """PHP-specific safety checks."""
+        issues = []
+        
+        # Check for dangerous functions
+        dangerous_php = ['eval', 'system', 'exec', 'shell_exec', 'passthru', 'popen']
+        for func in dangerous_php:
+            if func + '(' in code:
+                issues.append(SafetyIssue(
+                    category=IssueCategory.CODE_INJECTION,
+                    severity=SeverityLevel.CRITICAL,
+                    message=f"Dangerous PHP function: {func}()",
+                    suggestion=f"Avoid using {func}() with user input"
+                ))
+        
+        return issues
+
+    def _check_sql_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """SQL-specific safety checks."""
+        issues = []
+        
+        # Check for SQL injection patterns
+        if '--' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.CODE_INJECTION,
+                severity=SeverityLevel.CRITICAL,
+                message="Comment syntax detected - potential SQL injection",
+                suggestion="Use parameterized queries"
+            ))
+        
+        return issues
+
+    def _check_bash_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """Bash-specific safety checks."""
+        issues = []
+        
+        # Check for command injection
+        if '$((' not in code and '$(' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.CODE_INJECTION,
+                severity=SeverityLevel.HIGH,
+                message="Command substitution detected",
+                suggestion="Be careful with command substitution and validate input"
+            ))
+        
+        return issues
+
+    def _check_powershell_code(self, code: str, context: Dict) -> List[SafetyIssue]:
+        """PowerShell-specific safety checks."""
+        issues = []
+        
+        # Check for execution policy bypass
+        if 'Bypass' in code and 'ExecutionPolicy' in code:
+            issues.append(SafetyIssue(
+                category=IssueCategory.MALICIOUS_CODE,
+                severity=SeverityLevel.HIGH,
+                message="Execution policy bypass detected",
+                suggestion="Avoid bypassing security policies"
+            ))
+        
+        return issues
+
+    def _check_environment_specific(self, code: str, environment: str) -> List[SafetyIssue]:
+        """Environment-specific safety checks."""
+        issues = []
+        
+        if environment == 'production':
+
 
