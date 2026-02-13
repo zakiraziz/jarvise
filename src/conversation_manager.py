@@ -898,6 +898,403 @@ class ConversationManager:
         
         try:
             conv = self.conversations[conv_id]
+                        # Save to JSON file
+            filename = f"{conv_id}.json"
+            filepath = self.storage_path / filename
             
+            # Prepare for JSON serialization
+            conv_copy = conv.copy()
+            conv_copy['start_time'] = conv_copy['start_time'].isoformat() if isinstance(conv_copy['start_time'], datetime) else conv_copy['start_time']
+            if conv_copy['end_time']:
+                conv_copy['end_time'] = conv_copy['end_time'].isoformat() if isinstance(conv_copy['end_time'], datetime) else conv_copy['end_time']
+            
+            # Convert messages for JSON
+            conv_copy['messages'] = []
+            for msg in conv['messages']:
+                msg_copy = msg.copy()
+                msg_copy['content'] = self._decompress_content(msg['content'])
+                conv_copy['messages'].append(msg_copy)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(conv_copy, f, indent=2, ensure_ascii=False, default=str)
+            
+            # Save to database
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Insert/update conversation
+                cursor.execute('''
+                    INSERT OR REPLACE INTO conversations
+                    (id, start_time, end_time, state, summary, metadata, tags, rating, feedback)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    conv_id,
+                    conv['start_time'].isoformat() if isinstance(conv['start_time'], datetime) else conv['start_time'],
+                    conv['end_time'].isoformat() if conv['end_time'] and isinstance(conv['end_time'], datetime) else conv['end_time'],
+                    conv['state'].value if isinstance(conv['state'], ConversationState) else conv['state'],
+                    json.dumps(conv.get('summary', {})),
+                    json.dumps(conv.get('metadata', {})),
+                    json.dumps(conv.get('tags', [])),
+                    None,
+                    None
+                ))
+                
+                # Insert messages
+                for msg in conv['messages']:
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO messages
+                        (id, conversation_id, timestamp, role, content, metadata, tokens, sentiment, topics, references, attachments)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        msg['id'],
+                        conv_id,
+                        msg['timestamp'],
+                        msg['role'],
+                        msg['content'],  # Already decompressed
+                        json.dumps(msg.get('metadata', {})),
+                        msg.get('tokens'),
+                        msg.get('sentiment'),
+                        msg.get('topics', '[]'),
+                        msg.get('references', '[]'),
+                        msg.get('attachments', '[]')
+                    ))
+                
+                conn.commit()
+            
+            logger.info(f"Saved conversation {conv_id} to {filepath}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save conversation {conv_id}: {e}")
+            return False
+
+    def load_conversation(self, conversation_id: str) -> bool:
+        """Load a conversation from disk."""
+        try:
+            # Try to load from JSON file
+            filepath = self.storage_path / f"{conversation_id}.json"
+            
+            if filepath.exists():
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    conv_data = json.load(f)
+                
+                # Parse datetime strings
+                conv_data['start_time'] = datetime.fromisoformat(conv_data['start_time'])
+                if conv_data.get('end_time'):
+                    conv_data['end_time'] = datetime.fromisoformat(conv_data['end_time'])
+                
+                # Parse state
+                if isinstance(conv_data['state'], str):
+                    try:
+                        conv_data['state'] = ConversationState(conv_data['state'])
+                    except ValueError:
+                        conv_data['state'] = ConversationState.ACTIVE
+                
+                # Store in cache
+                self.conversations[conversation_id] = conv_data
+                self.current_conversation_id = conversation_id
+                
+                logger.info(f"Loaded conversation {conversation_id} from file")
+                return True
+            
+            # Try to load from database
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Load conversation
+                cursor.execute('SELECT * FROM conversations WHERE id = ?', (conversation_id,))
+                conv_row = cursor.fetchone()
+                
+                if not conv_row:
+                    logger.warning(f"Conversation {conversation_id} not found")
+                    return False
+                
+                # Load messages
+                cursor.execute('SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp', (conversation_id,))
+                messages = cursor.fetchall()
+                
+                # Build conversation object
+                conv_data = {
+                    'id': conv_row['id'],
+                    'start_time': datetime.fromisoformat(conv_row['start_time']),
+                    'end_time': datetime.fromisoformat(conv_row['end_time']) if conv_row['end_time'] else None,
+                    'state': ConversationState(conv_row['state']),
+                    'messages': [dict(msg) for msg in messages],
+                    'problems': [],  # TODO: Load from separate table if needed
+                    'solutions': [],  # TODO: Load from separate table if needed
+                    'metadata': json.loads(conv_row['metadata']) if conv_row['metadata'] else {},
+                    'tags': json.loads(conv_row['tags']) if conv_row['tags'] else [],
+                    'participants': ['user', 'assistant'],  # Default
+                    'summary': json.loads(conv_row['summary']) if conv_row['summary'] else None,
+                    'total_tokens': sum(msg.get('tokens', 0) for msg in messages)
+                }
+                
+                self.conversations[conversation_id] = conv_data
+                self.current_conversation_id = conversation_id
+                
+                logger.info(f"Loaded conversation {conversation_id} from database")
+                return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load conversation {conversation_id}: {e}")
+            return False
+
+    def list_conversations(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        state: Optional[ConversationState] = None,
+        tags: Optional[List[str]] = None
+    ) -> List[Dict]:
+        """List all saved conversations with filtering."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                query = "SELECT * FROM conversations"
+                params = []
+                
+                conditions = []
+                if state:
+                    conditions.append("state = ?")
+                    params.append(state.value)
+                
+                if tags:
+                    # Simple tag matching (can be enhanced)
+                    conditions.append("tags LIKE ?")
+                    params.append(f"%{tags[0]}%")
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY start_time DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+                
+                cursor.execute(query, params)
+                
+                conversations = []
+                for row in cursor.fetchall():
+                    conv = dict(row)
+                    conv['metadata'] = json.loads(conv['metadata']) if conv['metadata'] else {}
+                    conv['tags'] = json.loads(conv['tags']) if conv['tags'] else []
+                    conversations.append(conv)
+                
+                return conversations
+                
+        except Exception as e:
+            logger.error(f"Failed to list conversations: {e}")
+            return []
+
+    def get_conversation_summary(self, conversation_id: Optional[str] = None) -> Optional[Dict]:
+        """Get a summary of the conversation."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return None
+        
+        conv = self.conversations[conv_id]
+        
+        # Generate or use existing summary
+        if not conv.get('summary'):
+            summary = self.generate_summary(conv_id)
+            if summary:
+                return asdict(summary)
+        
+        return conv.get('summary')
+
+    def close_conversation(
+        self,
+        conversation_id: Optional[str] = None,
+        rating: Optional[int] = None,
+        feedback: Optional[str] = None
+    ) -> bool:
+        """Close a conversation with optional feedback."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return False
+        
+        with self._lock:
+            conv = self.conversations[conv_id]
+            conv['end_time'] = datetime.now()
+            conv['state'] = ConversationState.COMPLETED
+            
+            # Generate final summary
+            self.generate_summary(conv_id)
+            
+            # Add closing message
+            self.add_message(
+                "Conversation ended",
+                MessageType.SYSTEM,
+                metadata={'event': 'conversation_end', 'rating': rating}
+            )
+            
+            # Save with feedback
+            if rating is not None:
+                conv['rating'] = rating
+            if feedback:
+                conv['feedback'] = feedback
+            
+            self.save_conversation(conv_id)
+            
+            logger.info(f"Closed conversation {conv_id}")
+            return True
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation."""
+        try:
+            # Remove from cache
+            if conversation_id in self.conversations:
+                del self.conversations[conversation_id]
+            
+            # Delete from database
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM messages WHERE conversation_id = ?', (conversation_id,))
+                cursor.execute('DELETE FROM conversations WHERE id = ?', (conversation_id,))
+                conn.commit()
+            
+            # Delete JSON file
+            filepath = self.storage_path / f"{conversation_id}.json"
+            if filepath.exists():
+                filepath.unlink()
+            
+            logger.info(f"Deleted conversation {conversation_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete conversation {conversation_id}: {e}")
+            return False
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get overall conversation statistics."""
+        stats = {
+            'total_conversations': 0,
+            'total_messages': 0,
+            'total_problems': 0,
+            'total_solutions': 0,
+            'total_tokens': 0,
+            'average_messages_per_conversation': 0,
+            'average_problems_per_conversation': 0,
+            'average_solutions_per_conversation': 0,
+            'top_topics': [],
+            'sentiment_distribution': defaultdict(int),
+            'conversations_by_state': defaultdict(int),
+            'average_duration': None,
+            'total_duration': timedelta()
+        }
+        
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Basic counts
+                cursor.execute('SELECT COUNT(*) FROM conversations')
+                stats['total_conversations'] = cursor.fetchone()[0]
+                
+                cursor.execute('SELECT COUNT(*) FROM messages')
+                stats['total_messages'] = cursor.fetchone()[0]
+                
+                # Calculate averages
+                if stats['total_conversations'] > 0:
+                    stats['average_messages_per_conversation'] = stats['total_messages'] / stats['total_conversations']
+                
+                # Get top topics
+                if self.enable_topics:
+                    cursor.execute('''
+                        SELECT name, count FROM topics 
+                        ORDER BY count DESC LIMIT 10
+                    ''')
+                    stats['top_topics'] = [dict(row) for row in cursor.fetchall()]
+                
+                # Get sentiment distribution
+                cursor.execute('''
+                    SELECT sentiment, COUNT(*) as count 
+                    FROM messages 
+                    WHERE sentiment IS NOT NULL 
+                    GROUP BY sentiment
+                ''')
+                for row in cursor.fetchall():
+                    stats['sentiment_distribution'][row['sentiment']] = row['count']
+                
+                # Get conversations by state
+                cursor.execute('''
+                    SELECT state, COUNT(*) as count 
+                    FROM conversations 
+                    GROUP BY state
+                ''')
+                for row in cursor.fetchall():
+                    stats['conversations_by_state'][row['state']] = row['count']
+                
+                # Calculate durations
+                cursor.execute('''
+                    SELECT julianday(end_time) - julianday(start_time) as duration
+                    FROM conversations
+                    WHERE end_time IS NOT NULL
+                ''')
+                durations = [row[0] for row in cursor.fetchall() if row[0]]
+                if durations:
+                    avg_duration_days = sum(durations) / len(durations)
+                    stats['average_duration'] = timedelta(days=avg_duration_days)
+                    stats['total_duration'] = timedelta(days=sum(durations))
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Failed to get statistics: {e}")
+            return stats
+
+    def export_all_conversations(self, format: str = 'json') -> bool:
+        """Export all conversations to a single file."""
+        try:
+            all_convs = []
+            conversations = self.list_conversations(limit=1000)
+            
+            for conv in conversations:
+                self.load_conversation(conv['id'])
+                conv_data = self.export_conversation(format='json', conversation_id=conv['id'])
+                if conv_data:
+                    all_convs.append(conv_data)
+            
+            if format == 'json':
+                output_file = self.storage_path / "all_conversations.json"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(all_convs, f, indent=2, ensure_ascii=False, default=str)
+            
+            elif format == 'markdown':
+                output_file = self.storage_path / "all_conversations.md"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    for conv in all_convs:
+                        f.write(self.export_conversation(format='markdown', conversation_id=conv['id']))
+                        f.write("\n\n---\n\n")
+            
+            logger.info(f"Exported {len(all_convs)} conversations to {output_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to export all conversations: {e}")
+            return False
+
+    def cleanup_old_conversations(self, days: int = 30) -> int:
+        """Clean up conversations older than specified days."""
+        try:
+            cutoff_date = datetime.now() - timedelta(days=days)
+            
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id FROM conversations 
+                    WHERE start_time < ?
+                ''', (cutoff_date.isoformat(),))
+                
+                old_convs = [row['id'] for row in cursor.fetchall()]
+                
+                for conv_id in old_convs:
+                    self.delete_conversation(conv_id)
+                
+                logger.info(f"Cleaned up {len(old_convs)} conversations older than {days} days")
+                return len(old_convs)
+                
+        except Exception as e:
+            logger.error(f"Failed to clean up conversations: {e}")
+            return 0
 
 
