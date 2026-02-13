@@ -396,4 +396,251 @@ class SpeechHandler:
         }
         for abbr, full in abbreviations.items():
             text = text.replace(abbr, full)
+        # Handle URLs and emails
+        text = re.sub(r'https?://\S+', 'link', text)
+        text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', 'email address', text)
         
+        # Truncate very long text
+        max_chars = 500
+        if len(text) > max_chars:
+            text = text[:max_chars] + '...'
+        
+        return text.strip()
+    
+    def _cache_speech(self, text: str):
+        """Cache speech for future use"""
+        if not self.cache_enabled:
+            return
+        
+        try:
+            cache_key = hash(text)
+            cache_file = os.path.join(self.cache_dir, f"{cache_key}.mp3")
+            
+            if not os.path.exists(cache_file):
+                # Generate and cache the speech
+                tts = gTTS(text=text, lang='en', slow=False)
+                tts.save(cache_file)
+                self.speech_cache[text] = cache_file
+                logger.info(f"Cached speech: {text[:50]}...")
+        except Exception as e:
+            logger.error(f"Error caching speech: {e}")
+    
+    def _play_cached(self, text: str) -> bool:
+        """Play cached speech"""
+        try:
+            cache_file = self.speech_cache.get(text)
+            if cache_file and os.path.exists(cache_file):
+                pygame.mixer.init()
+                pygame.mixer.music.load(cache_file)
+                pygame.mixer.music.play()
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.1)
+                pygame.mixer.quit()
+                return True
+        except Exception as e:
+            logger.error(f"Error playing cached speech: {e}")
+        return False
+    
+    def set_rate(self, rate: int):
+        """Set speech rate (words per minute)"""
+        self.voice_rate = rate
+        if self.tts_engine == 'pyttsx3' and self.engine:
+            self.engine.setProperty('rate', rate)
+        logger.info(f"Speech rate set to {rate}")
+    
+    def set_volume(self, volume: float):
+        """Set speech volume (0.0 to 1.0)"""
+        self.voice_volume = max(0.0, min(1.0, volume))
+        if self.tts_engine == 'pyttsx3' and self.engine:
+            self.engine.setProperty('volume', self.voice_volume)
+        logger.info(f"Volume set to {self.voice_volume}")
+    
+    def set_voice(self, voice_id: str):
+        """Set voice by ID"""
+        self.voice_id = voice_id
+        if self.tts_engine == 'pyttsx3' and self.engine:
+            self.engine.setProperty('voice', voice_id)
+        logger.info(f"Voice set to {voice_id}")
+    
+    def set_enabled(self, enabled: bool):
+        """Enable or disable speech"""
+        self.enabled = enabled
+        if not enabled:
+            self.stop()
+            self.clear_queue()
+        logger.info(f"Speech {'enabled' if enabled else 'disabled'}")
+    
+    def set_tts_engine(self, engine: str):
+        """Change TTS engine"""
+        if engine in ['pyttsx3', 'gtts', 'pywhatkit']:
+            self.tts_engine = engine
+            self._init_engine()
+            logger.info(f"TTS engine changed to {engine}")
+        else:
+            logger.error(f"Invalid TTS engine: {engine}")
+    
+    def get_voices(self) -> List[Dict[str, Any]]:
+        """Get available voices with enhanced information"""
+        if self.tts_engine != 'pyttsx3' or self.engine is None:
+            return []
+        
+        try:
+            voices = self.engine.getProperty('voices')
+            voice_list = []
+            
+            for v in voices:
+                voice_info = {
+                    'id': v.id,
+                    'name': v.name,
+                    'languages': v.languages,
+                    'gender': self._detect_voice_gender(v),
+                    'age': self._detect_voice_age(v)
+                }
+                voice_list.append(voice_info)
+            
+            return voice_list
+        except Exception as e:
+            logger.error(f"Error getting voices: {e}")
+            return []
+    
+    def _detect_voice_gender(self, voice) -> str:
+        """Detect voice gender from voice properties"""
+        voice_str = str(voice.name).lower() + str(voice.id).lower()
+        if 'female' in voice_str or 'zira' in voice_str:
+            return 'female'
+        elif 'male' in voice_str or 'david' in voice_str:
+            return 'male'
+        return 'unknown'
+    
+    def _detect_voice_age(self, voice) -> str:
+        """Detect voice age from voice properties"""
+        voice_str = str(voice.name).lower()
+        if 'child' in voice_str:
+            return 'child'
+        elif 'teen' in voice_str:
+            return 'teen'
+        elif 'adult' in voice_str:
+            return 'adult'
+        elif 'senior' in voice_str:
+            return 'senior'
+        return 'unknown'
+    
+    def say_hello(self, custom_name: str = None):
+        """Say personalized hello message"""
+        name = custom_name or self.config.get('assistant', {}).get('name', 'Jarvis')
+        greeting = self.speech_config.get('greeting', f"Hello! I am {name}. How can I assist you today?")
+        self.speak(greeting, priority=SpeechPriority.NORMAL)
+    
+    def say_goodbye(self, custom_message: str = None):
+        """Say personalized goodbye message"""
+        message = custom_message or self.speech_config.get('farewell', "Goodbye! Have a wonderful day!")
+        self.speak(message, priority=SpeechPriority.NORMAL)
+    
+    def say_error(self, error_message: str):
+        """Announce error message"""
+        self.speak(f"Sorry, an error occurred: {error_message}", priority=SpeechPriority.HIGH)
+    
+    def say_waiting(self):
+        """Announce waiting state"""
+        self.speak("Please wait a moment", priority=SpeechPriority.LOW)
+    
+    def stop(self):
+        """Stop current speech"""
+        if self.tts_engine == 'pyttsx3' and self.engine:
+            try:
+                self.engine.stop()
+            except Exception as e:
+                logger.error(f"Error stopping speech: {e}")
+        elif self.tts_engine == 'gtts':
+            try:
+                pygame.mixer.music.stop()
+            except:
+                pass
+    
+    def clear_queue(self):
+        """Clear all pending speech from queue"""
+        while not self.speech_queue.empty():
+            try:
+                self.speech_queue.get_nowait()
+            except:
+                break
+        logger.info("Speech queue cleared")
+    
+    def pause(self):
+        """Pause speech temporarily"""
+        if self.tts_engine == 'pyttsx3' and self.engine:
+            try:
+                self.engine.stop()  # pyttsx3 doesn't support pause, so stop
+            except:
+                pass
+        logger.info("Speech paused")
+    
+    def resume(self):
+        """Resume speech"""
+        # pyttsx3 doesn't support resume, so nothing to do
+        logger.info("Speech resumed")
+    
+    def cleanup(self):
+        """Enhanced cleanup resources"""
+        try:
+            self.queue_running = False
+            if self.queue_thread and self.queue_thread.is_alive():
+                self.queue_thread.join(timeout=2)
+            
+            self.stop()
+            self.clear_queue()
+            
+            if self.tts_engine == 'pyttsx3' and self.engine:
+                self.engine.stop()
+            
+            if self.tts_engine == 'gtts':
+                pygame.mixer.quit()
+            
+            logger.info("Speech handler cleaned up")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
+    def is_available(self) -> bool:
+        """Check if speech is available"""
+        if not self.enabled:
+            return False
+        
+        if self.tts_engine == 'pyttsx3':
+            return PYTTSX3_AVAILABLE and self.engine is not None
+        elif self.tts_engine == 'gtts':
+            return GTTS_AVAILABLE
+        elif self.tts_engine == 'pywhatkit':
+            return KIT_AVAILABLE
+        return False
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Enhanced status information"""
+        return {
+            'enabled': self.enabled,
+            'tts_engine': self.tts_engine,
+            'rate': self.voice_rate,
+            'volume': self.voice_volume,
+            'gender': self.voice_gender,
+            'available': self.is_available(),
+            'queue_enabled': self.speech_queue_enabled,
+            'queue_size': self.speech_queue.qsize(),
+            'currently_speaking': self.currently_speaking,
+            'interruptible': self.interruptible,
+            'cache_enabled': self.cache_enabled,
+            'cache_size': len(self.speech_cache),
+            'voices_count': len(self.get_voices())
+        }
+    
+    def get_queue_info(self) -> Dict[str, Any]:
+        """Get information about speech queue"""
+        return {
+            'enabled': self.speech_queue_enabled,
+            'size': self.speech_queue.qsize(),
+            'max_size': self.max_queue_size,
+            'currently_speaking': self.currently_speaking
+        }
+    
+    def test_speech(self, text: str = "This is a test of the speech system.") -> bool:
+        """Test speech functionality"""
+        logger.info("Testing speech system...")
+        return self.speak(text, priority=SpeechPriority.CRITICAL, block=True)
