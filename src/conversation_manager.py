@@ -379,4 +379,410 @@ class ConversationManager:
                     role = MessageType[role.upper()]
                 except KeyError:
                     role = MessageType.USER
+                        # Create message
+            message_id = self._generate_id()
+            timestamp = datetime.now()
             
+            # Analyze sentiment
+            sentiment = self._analyze_sentiment(content) if self.enable_sentiment else None
+            
+            # Extract topics
+            topics = self._extract_topics(content) if self.enable_topics else []
+            
+            message = Message(
+                id=message_id,
+                timestamp=timestamp,
+                role=role,
+                content=content,
+                metadata=metadata or {},
+                tokens=tokens,
+                sentiment=sentiment,
+                topics=topics,
+                references=references or [],
+                attachments=attachments or [],
+                edited=False,
+                edit_history=[]
+            )
+            
+            # Convert to dict for storage
+            message_dict = {
+                'id': message.id,
+                'timestamp': message.timestamp.isoformat(),
+                'role': message.role.value,
+                'content': self._compress_content(message.content),
+                'metadata': json.dumps(message.metadata),
+                'tokens': message.tokens,
+                'sentiment': message.sentiment,
+                'topics': json.dumps(message.topics),
+                'references': json.dumps(message.references),
+                'attachments': json.dumps(message.attachments),
+                'edited': message.edited,
+                'edit_history': json.dumps(message.edit_history)
+            }
+            
+            conversation['messages'].append(message_dict)
+            conversation['total_tokens'] += (tokens or 0)
+            
+            # Update topics in database
+            if self.enable_topics and topics:
+                self._update_topics(conv_id, message_id, topics)
+            
+            # Update search index
+            if self.enable_search:
+                self._update_search_index(conv_id, message_id, content)
+            
+            # Maintain max history
+            if len(conversation['messages']) > self.max_history:
+                conversation['messages'] = conversation['messages'][-self.max_history:]
+            
+            # Auto-save if enabled
+            if self.auto_save and len(conversation['messages']) % 10 == 0:
+                self.save_conversation(conv_id)
+            
+            # Auto-summarize if enabled
+            if self.auto_summarize and len(conversation['messages']) % 20 == 0:
+                self.generate_summary(conv_id)
+            
+            logger.debug(f"Added message {message_id} to conversation {conv_id}")
+            return message_id
+
+    def add_problem(
+        self,
+        problem_text: str,
+        analysis: Dict,
+        metadata: Optional[Dict] = None
+    ) -> str:
+        """Add a problem to the current conversation with enhanced metadata."""
+        problem_id = self._generate_id("prob")
+        
+        problem_entry = {
+            'id': problem_id,
+            'timestamp': datetime.now().isoformat(),
+            'text': problem_text,
+            'analysis': analysis,
+            'status': 'open',
+            'attempts': 0,
+            'solutions_tried': [],
+            'metadata': metadata or {}
+        }
+
+        with self._lock:
+            conv_id = self.current_conversation_id
+            if conv_id:
+                self.conversations[conv_id]['problems'].append(problem_entry)
+
+        # Add as message
+        self.add_message(
+            f"Problem: {problem_text[:200]}...",
+            MessageType.PROBLEM,
+            metadata={'problem_id': problem_id, 'analysis': analysis}
+        )
+
+        logger.info(f"Added problem {problem_id} to conversation {conv_id}")
+        return problem_id
+
+    def add_solution(
+        self,
+        solution: Dict,
+        problem_id: Optional[str] = None,
+        metadata: Optional[Dict] = None
+    ) -> str:
+        """Add a solution to the current conversation with enhanced tracking."""
+        solution_id = self._generate_id("sol")
+        
+        solution_entry = {
+            'id': solution_id,
+            'timestamp': datetime.now().isoformat(),
+            'solution': solution,
+            'problem_id': problem_id,
+            'feedback': None,
+            'rating': None,
+            'metadata': metadata or {}
+        }
+
+        with self._lock:
+            conv_id = self.current_conversation_id
+            if conv_id:
+                self.conversations[conv_id]['solutions'].append(solution_entry)
+                
+                # Update problem status if problem_id provided
+                if problem_id:
+                    for problem in self.conversations[conv_id]['problems']:
+                        if problem['id'] == problem_id:
+                            problem['solutions_tried'].append(solution_id)
+                            problem['attempts'] += 1
+                            break
+
+        # Add as message
+        self.add_message(
+            f"Solution: {solution.get('explanation', 'N/A')[:200]}...",
+            MessageType.SOLUTION,
+            metadata={'solution_id': solution_id, 'problem_id': problem_id}
+        )
+
+        logger.info(f"Added solution {solution_id} to conversation {conv_id}")
+        return solution_id
+
+    def add_feedback(
+        self,
+        message_id: str,
+        feedback: str,
+        rating: Optional[int] = None,
+        metadata: Optional[Dict] = None
+    ) -> bool:
+        """Add feedback for a specific message."""
+        try:
+            with self._lock:
+                conv_id = self.current_conversation_id
+                if not conv_id:
+                    return False
+                
+                for msg in self.conversations[conv_id]['messages']:
+                    if msg['id'] == message_id:
+                        msg['feedback'] = {
+                            'timestamp': datetime.now().isoformat(),
+                            'text': feedback,
+                            'rating': rating,
+                            'metadata': metadata or {}
+                        }
+                        
+                        self.add_message(
+                            f"Feedback provided: {feedback[:100]}...",
+                            MessageType.FEEDBACK,
+                            metadata={'message_id': message_id, 'rating': rating}
+                        )
+                        
+                        logger.info(f"Added feedback for message {message_id}")
+                        return True
+                
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to add feedback: {e}")
+            return False
+
+    def edit_message(
+        self,
+        message_id: str,
+        new_content: str,
+        reason: Optional[str] = None
+    ) -> bool:
+        """Edit an existing message."""
+        try:
+            with self._lock:
+                conv_id = self.current_conversation_id
+                if not conv_id:
+                    return False
+                
+                for msg in self.conversations[conv_id]['messages']:
+                    if msg['id'] == message_id:
+                        # Store edit history
+                        edit_entry = {
+                            'timestamp': datetime.now().isoformat(),
+                            'old_content': self._decompress_content(msg['content']),
+                            'reason': reason
+                        }
+                        
+                        if 'edit_history' not in msg:
+                            msg['edit_history'] = []
+                        
+                        edit_history = json.loads(msg.get('edit_history', '[]'))
+                        edit_history.append(edit_entry)
+                        
+                        # Update message
+                        msg['content'] = self._compress_content(new_content)
+                        msg['edited'] = True
+                        msg['edit_history'] = json.dumps(edit_history)
+                        msg['timestamp'] = datetime.now().isoformat()
+                        
+                        logger.info(f"Edited message {message_id}")
+                        return True
+                
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+            return False
+
+    def _update_topics(self, conversation_id: str, message_id: str, topics: List[str]):
+        """Update topics in database."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                for topic in topics:
+                    # Insert or update topic
+                    cursor.execute('''
+                        INSERT INTO topics (name, last_seen)
+                        VALUES (?, ?)
+                        ON CONFLICT(name) DO UPDATE SET
+                            count = count + 1,
+                            last_seen = ?
+                    ''', (topic, datetime.now(), datetime.now()))
+                    
+                    # Get topic ID
+                    cursor.execute('SELECT id FROM topics WHERE name = ?', (topic,))
+                    topic_id = cursor.fetchone()['id']
+                    
+                    # Link message to topic
+                    cursor.execute('''
+                        INSERT INTO message_topics (message_id, topic_id, confidence)
+                        VALUES (?, ?, ?)
+                    ''', (message_id, topic_id, 1.0))
+                
+                conn.commit()
+                
+        except Exception as e:
+            logger.error(f"Failed to update topics: {e}")
+
+    def _update_search_index(self, conversation_id: str, message_id: str, content: str):
+        """Update search index."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO messages_fts (content, conversation_id, message_id)
+                    VALUES (?, ?, ?)
+                ''', (content, conversation_id, message_id))
+                conn.commit()
+                
+        except Exception as e:
+            logger.error(f"Failed to update search index: {e}")
+
+    def search_messages(
+        self,
+        query: str,
+        conversation_id: Optional[str] = None,
+        limit: int = 20
+    ) -> List[Dict]:
+        """Search messages using full-text search."""
+        if not self.enable_search:
+            logger.warning("Search is disabled")
+            return []
+        
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                if conversation_id:
+                    cursor.execute('''
+                        SELECT m.*, fts.conversation_id
+                        FROM messages_fts fts
+                        JOIN messages m ON m.id = fts.message_id
+                        WHERE fts.content MATCH ? AND fts.conversation_id = ?
+                        ORDER BY rank
+                        LIMIT ?
+                    ''', (query, conversation_id, limit))
+                else:
+                    cursor.execute('''
+                        SELECT m.*, fts.conversation_id
+                        FROM messages_fts fts
+                        JOIN messages m ON m.id = fts.message_id
+                        WHERE fts.content MATCH ?
+                        ORDER BY rank
+                        LIMIT ?
+                    ''', (query, limit))
+                
+                results = []
+                for row in cursor.fetchall():
+                    result = dict(row)
+                    result['content'] = self._decompress_content(result['content'])
+                    results.append(result)
+                
+                return results
+                
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return []
+
+    def get_conversation_history(
+        self,
+        conversation_id: Optional[str] = None,
+        include_decompressed: bool = True
+    ) -> List[Dict]:
+        """Get conversation history with decompression option."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return []
+        
+        messages = self.conversations[conv_id]['messages']
+        
+        if include_decompressed:
+            decompressed = []
+            for msg in messages:
+                msg_copy = msg.copy()
+                msg_copy['content'] = self._decompress_content(msg['content'])
+                decompressed.append(msg_copy)
+            return decompressed
+        
+        return messages
+
+    def get_recent_context(
+        self,
+        max_messages: int = 10,
+        conversation_id: Optional[str] = None,
+        include_system: bool = False
+    ) -> List[Dict]:
+        """Get recent conversation context with filtering."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return []
+        
+        messages = self.conversations[conv_id]['messages'][-max_messages:]
+        
+        context = []
+        for msg in messages:
+            msg_copy = {
+                'id': msg['id'],
+                'timestamp': msg['timestamp'],
+                'role': msg['role'],
+                'content': self._decompress_content(msg['content']),
+                'sentiment': msg.get('sentiment'),
+                'tokens': msg.get('tokens')
+            }
+            
+            if include_system or msg['role'] not in ['system', 'debug']:
+                context.append(msg_copy)
+        
+        return context
+
+    def get_current_problem(self, conversation_id: Optional[str] = None) -> Optional[Dict]:
+        """Get the current active problem."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return None
+        
+        problems = self.conversations[conv_id]['problems']
+        if problems:
+            # Return the most recent open problem
+            for problem in reversed(problems):
+                if problem.get('status') == 'open':
+                    return problem
+            return problems[-1]
+        
+        return None
+
+    def get_current_solution(self, conversation_id: Optional[str] = None) -> Optional[Dict]:
+        """Get the current active solution."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return None
+        
+        solutions = self.conversations[conv_id]['solutions']
+        return solutions[-1] if solutions else None
+
+    def generate_summary(self, conversation_id: Optional[str] = None) -> Optional[ConversationSummary]:
+        """Generate a comprehensive summary of the conversation."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return None
+        
+        conv = self.conversations[conv_id]
+        
+        # Calculate statistics
+        total_messages = len(conv['messages'])
+        total_problems = len(conv['problems'])
+        total_solutions = len(conv['solutions'])
+        total_tokens = conv['total_tokens']
+        
+
