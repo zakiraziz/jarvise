@@ -784,5 +784,120 @@ class ConversationManager:
         total_problems = len(conv['problems'])
         total_solutions = len(conv['solutions'])
         total_tokens = conv['total_tokens']
+                # Calculate duration
+        start_time = datetime.fromisoformat(conv['start_time']) if isinstance(conv['start_time'], str) else conv['start_time']
+        end_time = None
+        if conv['end_time']:
+            end_time = datetime.fromisoformat(conv['end_time']) if isinstance(conv['end_time'], str) else conv['end_time']
         
+        duration = end_time - start_time if end_time else datetime.now() - start_time
+        
+        # Analyze sentiment trend
+        sentiment_trend = []
+        for msg in conv['messages'][-20:]:  # Last 20 messages
+            if msg.get('sentiment'):
+                sentiment_trend.append({
+                    'timestamp': msg['timestamp'],
+                    'sentiment': msg['sentiment']
+                })
+        
+        # Extract all topics
+        all_topics = set()
+        for msg in conv['messages']:
+            if msg.get('topics'):
+                topics = json.loads(msg['topics'])
+                all_topics.update(topics)
+        
+        # Create summary
+        summary = ConversationSummary(
+            id=conv_id,
+            start_time=start_time,
+            end_time=end_time,
+            state=ConversationState(conv['state']) if isinstance(conv['state'], str) else conv['state'],
+            total_messages=total_messages,
+            total_problems=total_problems,
+            total_solutions=total_solutions,
+            total_tokens=total_tokens,
+            duration=duration,
+            participants=conv['participants'],
+            topics=list(all_topics),
+            sentiment_trend=sentiment_trend,
+            tags=conv['tags'],
+            rating=None,
+            feedback=None
+        )
+        
+        # Store summary
+        conv['summary'] = asdict(summary)
+        
+        return summary
+
+    def export_conversation(
+        self,
+        format: str = 'json',
+        conversation_id: Optional[str] = None,
+        include_metadata: bool = True
+    ) -> Union[str, Dict, None]:
+        """Export conversation in various formats."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return None
+        
+        conv = self.conversations[conv_id].copy()
+        
+        # Decompress messages
+        for msg in conv['messages']:
+            msg['content'] = self._decompress_content(msg['content'])
+        
+        if format == 'json':
+            return conv
+        
+        elif format == 'text':
+            lines = []
+            lines.append(f"=== Conversation: {conv_id} ===\n")
+            lines.append(f"Started: {conv['start_time']}")
+            lines.append(f"State: {conv['state']}")
+            lines.append(f"Messages: {len(conv['messages'])}")
+            lines.append(f"Problems: {len(conv['problems'])}")
+            lines.append(f"Solutions: {len(conv['solutions'])}\n")
+            
+            for msg in conv['messages']:
+                role = msg['role'].upper()
+                time = msg['timestamp'][11:19] if isinstance(msg['timestamp'], str) else msg['timestamp'].strftime('%H:%M:%S')
+                content = msg['content'][:100] + "..." if len(msg['content']) > 100 else msg['content']
+                lines.append(f"[{time}] {role}: {content}")
+            
+            return "\n".join(lines)
+        
+        elif format == 'markdown':
+            lines = []
+            lines.append(f"# Conversation: {conv_id}\n")
+            lines.append(f"- **Started:** {conv['start_time']}")
+            lines.append(f"- **State:** {conv['state']}")
+            lines.append(f"- **Messages:** {len(conv['messages'])}")
+            lines.append(f"- **Problems:** {len(conv['problems'])}")
+            lines.append(f"- **Solutions:** {len(conv['solutions'])}\n")
+            
+            for msg in conv['messages']:
+                role = msg['role'].capitalize()
+                content = msg['content']
+                lines.append(f"### {role}")
+                lines.append(f"*{msg['timestamp']}*")
+                lines.append(f"\n{content}\n")
+                lines.append("---\n")
+            
+            return "\n".join(lines)
+        
+        return None
+
+    def save_conversation(self, conversation_id: Optional[str] = None) -> bool:
+        """Save conversation to both file and database."""
+        conv_id = conversation_id or self.current_conversation_id
+        if not conv_id or conv_id not in self.conversations:
+            return False
+        
+        try:
+            conv = self.conversations[conv_id]
+            
+
 
