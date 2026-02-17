@@ -1,46 +1,159 @@
-# Jarvis AI Assistant Configuration
+# Jarvis AI Assistant - Complete Configuration
 
 # OpenAI Configuration
 openai:
-  api_key: ""  # Add your OpenAI API key here
-  model: "gpt-3.5-turbo"
-  temperature: 0.7
-  max_tokens: 1000
-  timeout: 30
+  api_key: "${OPENAI_API_KEY}"  # Use environment variable
+  organization: "${OPENAI_ORG_ID}"  # Optional
+  model: "gpt-4-turbo-preview"  # Options: gpt-3.5-turbo, gpt-4, gpt-4-turbo-preview
+  temperature: 0.7  # 0.0-1.0, higher = more creative
+  max_tokens: 2000
+  top_p: 0.95
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  timeout: 30  # seconds
+  max_retries: 3
+  streaming: true  # Enable response streaming
 
-# Assistant Settings
+# Assistant Identity
 assistant:
   name: "Jarvis"
+  full_name: "Just A Rather Very Intelligent System"
   version: "2.0.0"
-  max_conversation_history: 15
-  safety_check_enabled: true
-  auto_save_notes: true
+  creator: "Tony Stark Technologies"
+  personality: "professional, helpful, witty"
+  catchphrases:
+    - "At your service, sir."
+    - "I've taken the liberty of..."
+    - "Shall I inform Miss Potts?"
+  
+  # Conversation Settings
+  max_conversation_history: 50
+  context_window: 10
+  auto_save_conversations: true
+  conversations_dir: "conversations"
+  
+  # Response Settings
+  response_style: "concise"  # concise, detailed, technical, casual
+  include_sources: true
+  markdown_formatting: true
+  emoji_enabled: true
+  
+  # Learning
+  learning_enabled: true
+  user_preferences_file: "data/preferences.json"
+  memory_enabled: true
+  memory_file: "data/memory.json"
 
 # Speech Settings
 speech:
   enabled: true
-  voice_rate: 150
-  voice_volume: 1.0
-  voice_gender: "male"
+  engine: "pyttsx3"  # pyttsx3, gtts, azure, amazon
+  voice_id: ""  # System-specific voice ID
+  voice_rate: 150  # Words per minute
+  voice_volume: 1.0  # 0.0-1.0
+  voice_gender: "male"  # male, female, neutral
+  language: "en-US"
+  
+  # Google TTS (if using gtts)
+  gtts:
+    slow: false
+    lang: "en"
+  
+  # Azure TTS (if using azure)
+  azure:
+    key: "${AZURE_TTS_KEY}"
+    region: "eastus"
+    voice_name: "en-US-GuyNeural"
+  
+  # Speech Recognition
+  recognition:
+    enabled: true
+    engine: "google"  # google, sphinx, azure, whisper
+    language: "en-US"
+    timeout: 5
+    phrase_time_limit: 10
+    energy_threshold: 300
+    pause_threshold: 0.8
+    dynamic_energy_threshold: true
 
-# Features
+# Features Configuration
 features:
+  # Communication Modes
   voice_mode: true
   text_mode: true
-  file_operations: true
+  gui_mode: false
+  api_mode: false
+  
+  # Core Features
   web_search: true
+  file_operations: true
   system_commands: true
-
-# Safety Settings
-safety:
-  blocked_keywords:
-    - "format c:"
-    - "rm -rf"
-    - "del /f"
-  max_file_size_mb: 10
-
-# Logging
-logging:
-  level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "logs/jarvis.log"
+  code_execution: false  # Sandboxed
+  email_integration: false
+  calendar_integration: false
+  home_automation: false
+  
+  # Web Features
+  web_search:
+    enabled: true
+    engine: "duckduckgo"  # google, bing, duckduckgo
+    api_key: "${SEARCH_API_KEY}"
+    max_results: 5
+    safe_search: true
+  
+  # File Operations
+  file_operations:
+    allowed_extensions:
+      - .txt
+      - .pdf
+      - .docx
+      - .xlsx
+      - .jpg
+      - .png
+      - .py
+      - .js
+      - .html
+      - .css
+      - .json
+      - .yaml
+    max_file_size_mb: 50
+    working_directory: "./workspace"
+    allow_delete: false
+    allow_modify: true
+  
+  # System Commands
+  system_commands:
+    allowed_commands:
+      - "date"
+      - "time"
+      - "uptime"
+      - "whoami"
+      - "pwd"
+      - "ls"
+      - "dir"
+      - "echo"
+    blocked_commands:
+      - "rm"
+      - "del"
+      - "format"
+      - "shutdown"
+      - "reboot"
+      - "sudo"
+      - "chmod"
+      - "chown"
+    command_timeout: 10
+    require_confirmation: true
+  
+  # Code Execution
+  code_execution:
+    enabled: false
+    languages:
+      - python
+      - javascript
+      - bash
+    sandbox: true
+    docker_image: "python:3.9-slim"
+    timeout: 5
+    memory_limit: "256m"
+    cpu_limit: "0.5"
+  
