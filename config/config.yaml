@@ -250,4 +250,200 @@ safety:
     max_tokens_per_minute: 90000
     max_conversations_per_hour: 30
 
+# Logging Configuration
+logging:
+  version: 1
+  disable_existing_loggers: false
+  
+  formatters:
+    detailed:
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+      datefmt: "%Y-%m-%d %H:%M:%S"
+    
+    simple:
+      format: "%(asctime)s - %(levelname)s - %(message)s"
+      datefmt: "%H:%M:%S"
+    
+    json:
+      format: '{"time": "%(asctime)s", "level": "%(levelname)s", "name": "%(name)s", "message": "%(message)s"}'
+      datefmt: "%Y-%m-%d %H:%M:%S"
+  
+  handlers:
+    console:
+      class: "logging.StreamHandler"
+      level: "INFO"
+      formatter: "simple"
+      stream: "ext://sys.stdout"
+    
+    file:
+      class: "logging.handlers.RotatingFileHandler"
+      level: "DEBUG"
+      formatter: "detailed"
+      filename: "logs/jarvis.log"
+      maxBytes: 10485760  # 10MB
+      backupCount: 5
+    
+    error_file:
+      class: "logging.handlers.RotatingFileHandler"
+      level: "ERROR"
+      formatter: "detailed"
+      filename: "logs/error.log"
+      maxBytes: 10485760
+      backupCount: 5
+    
+    json_file:
+      class: "logging.handlers.RotatingFileHandler"
+      level: "INFO"
+      formatter: "json"
+      filename: "logs/jarvis.json"
+      maxBytes: 10485760
+      backupCount: 3
+  
+  loggers:
+    jarvis:
+      level: "DEBUG"
+      handlers: ["console", "file", "json_file"]
+      propagate: false
+    
+    jarvis.security:
+      level: "INFO"
+      handlers: ["console", "file"]
+      propagate: false
+    
+    jarvis.speech:
+      level: "INFO"
+      handlers: ["console", "file"]
+      propagate: false
+    
+    jarvis.integrations:
+      level: "INFO"
+      handlers: ["file"]
+      propagate: false
+  
+  root:
+    level: "WARNING"
+    handlers: ["console"]
 
+# Database Configuration
+database:
+  enabled: false
+  type: "sqlite"  # sqlite, postgresql, mongodb
+  connection_string: "sqlite:///jarvis.db"
+  
+  sqlite:
+    database: "jarvis.db"
+    timeout: 5
+    isolation_level: null
+  
+  postgresql:
+    host: "localhost"
+    port: 5432
+    database: "jarvis"
+    username: "${DB_USERNAME}"
+    password: "${DB_PASSWORD}"
+    pool_size: 10
+    max_overflow: 20
+  
+  mongodb:
+    host: "localhost"
+    port: 27017
+    database: "jarvis"
+    username: "${MONGO_USERNAME}"
+    password: "${MONGO_PASSWORD}"
+    auth_source: "admin"
+
+# Cache Configuration
+cache:
+  enabled: true
+  type: "memory"  # memory, redis, file
+  ttl: 3600  # seconds
+  max_size: "100MB"
+  
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    password: "${REDIS_PASSWORD}"
+    decode_responses: true
+  
+  file:
+    directory: "cache"
+    compression: true
+
+# UI Configuration
+ui:
+  theme: "dark"  # dark, light, system
+  colors:
+    primary: "#00ff00"  # Jarvis green
+    secondary: "#ffffff"
+    error: "#ff0000"
+    warning: "#ffff00"
+    success: "#00ff00"
+    info: "#0000ff"
+  
+  console:
+    show_banner: true
+    show_timestamp: true
+    show_token_usage: true
+    typing_animation: true
+    progress_bar: true
+  
+  web:
+    enabled: false
+    host: "127.0.0.1"
+    port: 5000
+    debug: false
+    secret_key: "${WEB_SECRET_KEY}"
+  
+  gui:
+    enabled: false
+    width: 1024
+    height: 768
+    fullscreen: false
+    always_on_top: false
+
+# API Configuration
+api:
+  enabled: false
+  host: "127.0.0.1"
+  port: 8000
+  workers: 4
+  timeout: 60
+  
+  authentication:
+    enabled: true
+    type: "jwt"  # jwt, oauth2, api_key
+    secret_key: "${API_SECRET_KEY}"
+    token_expiry: 3600
+    
+  endpoints:
+    - "/api/v1/chat"
+    - "/api/v1/process"
+    - "/api/v1/files"
+    - "/api/v1/system"
+    
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+
+# Environment-specific overrides
+environments:
+  development:
+    logging:
+      level: "DEBUG"
+    safety:
+      level: 1
+    features:
+      code_execution:
+        enabled: true
+  
+  production:
+    logging:
+      level: "WARNING"
+    safety:
+      level: 3
+    features:
+      code_execution:
+        enabled: false
+    database:
+      enabled: true
