@@ -1334,4 +1334,398 @@ class JarvisAssistant:
             print(f"  Total: {memory.total / (1024**3):.1f} GB")
             print(f"  Available: {memory.available / (1024**3):.1f} GB")
             print(f"  Used: {memory.used / (1024**3):.1f} GB ({memory.percent}%)")
+                        # Create ASCII bar
+            bar_length = 50
+            filled = int(bar_length * memory.percent / 100)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            print(f"\n  [{bar}] {memory.percent}%")
             
+        except ImportError:
+            print("psutil not installed")
+        except Exception as e:
+            print(f"Error getting memory info: {e}")
+    
+    def _show_disk_usage(self):
+        """Show disk usage"""
+        try:
+            import psutil
+            disk = psutil.disk_usage('/')
+            
+            print(f"\n💾 Disk Usage:")
+            print(f"  Total: {disk.total / (1024**3):.1f} GB")
+            print(f"  Used: {disk.used / (1024**3):.1f} GB ({disk.percent}%)")
+            print(f"  Free: {disk.free / (1024**3):.1f} GB")
+            
+            # Create ASCII bar
+            bar_length = 50
+            filled = int(bar_length * disk.percent / 100)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            print(f"\n  [{bar}] {disk.percent}%")
+            
+        except ImportError:
+            print("psutil not installed")
+        except Exception as e:
+            print(f"Error getting disk info: {e}")
+    
+    def _show_battery_status(self):
+        """Show battery status"""
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            
+            if battery:
+                print(f"\n🔋 Battery Status:")
+                print(f"  Percentage: {battery.percent}%")
+                print(f"  Charging: {'Yes' if battery.power_plugged else 'No'}")
+                if battery.secsleft != -1:
+                    hours = battery.secsleft // 3600
+                    minutes = (battery.secsleft % 3600) // 60
+                    print(f"  Time left: {hours}h {minutes}m")
+            else:
+                print("No battery detected")
+                
+        except ImportError:
+            print("psutil not installed")
+        except Exception as e:
+            print(f"Error getting battery info: {e}")
+    
+    def _show_logged_users(self):
+        """Show logged in users"""
+        try:
+            import psutil
+            users = psutil.users()
+            
+            if users:
+                print(f"\n👥 Logged in users:")
+                for user in users:
+                    print(f"  {user.name} from {user.host} (since {user.started})")
+            else:
+                print("No other users logged in")
+                
+        except ImportError:
+            print("psutil not installed")
+        except Exception as e:
+            print(f"Error getting user info: {e}")
+    
+    def _show_services(self):
+        """Show running services (Windows only)"""
+        if platform.system() == 'Windows':
+            try:
+                result = subprocess.run(
+                    ['sc', 'query', 'state=', 'all'],
+                    capture_output=True,
+                    text=True
+                )
+                
+                lines = result.stdout.split('\n')
+                services = []
+                current_service = {}
+                
+                for line in lines:
+                    if 'SERVICE_NAME:' in line:
+                        if current_service:
+                            services.append(current_service)
+                        current_service = {'name': line.split(':')[1].strip()}
+                    elif 'DISPLAY_NAME:' in line:
+                        current_service['display'] = line.split(':')[1].strip()
+                    elif 'STATE' in line:
+                        if 'RUNNING' in line:
+                            current_service['state'] = 'Running'
+                        else:
+                            current_service['state'] = 'Stopped'
+                            
+                if current_service:
+                    services.append(current_service)
+                
+                # Show running services
+                running = [s for s in services if s.get('state') == 'Running']
+                print(f"\n🔄 Running services ({len(running)}):")
+                for service in running[:10]:  # Show first 10
+                    print(f"  • {service.get('display', service['name'])}")
+                    
+                if len(running) > 10:
+                    print(f"  ... and {len(running) - 10} more")
+                    
+            except Exception as e:
+                print(f"Error getting services: {e}")
+        else:
+            # Linux/Unix
+            try:
+                result = subprocess.run(
+                    ['systemctl', 'list-units', '--type=service', '--state=running'],
+                    capture_output=True,
+                    text=True
+                )
+                print(result.stdout[:500])  # Show first 500 chars
+            except Exception:
+                print("Could not list services")
+    
+    def web_mode(self):
+        """Enhanced web and search tools"""
+        print("\n" + "="*70)
+        print("🌐 WEB & SEARCH - Type 'back' to return to menu")
+        print("="*70)
+        print("\nWeb commands:")
+        print("  search [query]     - Web search")
+        print("  youtube [query]    - Search YouTube")
+        print("  wikipedia [topic]  - Wikipedia search")
+        print("  news [topic]       - Get news")
+        print("  weather [city]     - Weather forecast")
+        print("  translate [text]   - Translate text")
+        print("  define [word]      - Dictionary definition")
+        print("  synonym [word]     - Find synonyms")
+        print("  antonym [word]     - Find antonyms")
+        print("  stock [symbol]     - Stock price")
+        print("  crypto [coin]      - Cryptocurrency price")
+        print("  map [location]     - Show on map")
+        print("-"*70)
+        
+        while True:
+            try:
+                user_input = input("\nWeb> ").strip()
+                
+                if not user_input:
+                    continue
+                    
+                if user_input.lower() in ['back', 'menu', 'exit']:
+                    break
+                
+                # Enhanced web commands
+                parts = user_input.split()
+                cmd = parts[0].lower()
+                
+                if cmd == "define" and len(parts) >= 2:
+                    word = " ".join(parts[1:])
+                    self._dictionary_definition(word)
+                elif cmd == "synonym" and len(parts) >= 2:
+                    word = " ".join(parts[1:])
+                    self._thesaurus_lookup(word, "synonym")
+                elif cmd == "antonym" and len(parts) >= 2:
+                    word = " ".join(parts[1:])
+                    self._thesaurus_lookup(word, "antonym")
+                elif cmd == "stock" and len(parts) >= 2:
+                    symbol = parts[1].upper()
+                    self._stock_price(symbol)
+                elif cmd == "crypto" and len(parts) >= 2:
+                    coin = parts[1].lower()
+                    self._crypto_price(coin)
+                elif cmd == "map" and len(parts) >= 2:
+                    location = " ".join(parts[1:])
+                    self._open_map(location)
+                else:
+                    self.commands.process(user_input)
+                
+            except KeyboardInterrupt:
+                print("\n⏹️ Returning to menu...")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def _dictionary_definition(self, word):
+        """Get word definition"""
+        try:
+            import requests
+            url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
+            response = requests.get(url)
+            
+            if response.status_code == 200:
+                data = response.json()[0]
+                print(f"\n📖 {word.title()}:")
+                
+                for meaning in data.get('meanings', [])[:2]:
+                    part_of_speech = meaning.get('partOfSpeech', '')
+                    for definition in meaning.get('definitions', [])[:2]:
+                        print(f"  [{part_of_speech}] {definition.get('definition', '')}")
+                        if definition.get('example'):
+                            print(f"    Example: \"{definition.get('example')}\"")
+            else:
+                print(f"Could not find definition for '{word}'")
+                
+        except ImportError:
+            print("requests not installed. Install with: pip install requests")
+        except Exception as e:
+            print(f"Error getting definition: {e}")
+    
+    def _thesaurus_lookup(self, word, lookup_type):
+        """Look up synonyms/antonyms"""
+        try:
+            import requests
+            # Using Datamuse API
+            url = f"https://api.datamuse.com/words?rel_{lookup_type}={word}"
+            response = requests.get(url)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data:
+                    print(f"\n{lookup_type.title()}s for '{word}':")
+                    for item in data[:10]:
+                        print(f"  • {item.get('word')}")
+                else:
+                    print(f"No {lookup_type}s found for '{word}'")
+            else:
+                print(f"Could not find {lookup_type}s for '{word}'")
+                
+        except ImportError:
+            print("requests not installed")
+        except Exception as e:
+            print(f"Error looking up {lookup_type}s: {e}")
+    
+    def _stock_price(self, symbol):
+        """Get stock price"""
+        print(f"\n📈 Stock price for {symbol}:")
+        print("(API key required for real-time data)")
+        print("Demo: AAPL $175.34 (+1.2%)")
+        
+        # This would use a real API with proper authentication
+    
+    def _crypto_price(self, coin):
+        """Get cryptocurrency price"""
+        print(f"\n💰 {coin.upper()} price:")
+        print("(API key required for real-time data)")
+        print(f"Demo: {coin.upper()} $45,678.90")
+    
+    def _open_map(self, location):
+        """Open location in maps"""
+        import webbrowser
+        url = f"https://www.google.com/maps/search/{location.replace(' ', '+')}"
+        webbrowser.open(url)
+        print(f"🗺️ Opening map for: {location}")
+    
+    def show_help(self):
+        """Show comprehensive help"""
+        print("\n" + "="*70)
+        print("ℹ️ JARVIS HELP")
+        print("="*70)
+        
+        help_categories = {
+            "General": ["help", "menu", "quit", "clear", "mood", "stats"],
+            "Chat": ["chat", "ask [question]", "remember [info]", "recall"],
+            "Commands": ["time", "date", "weather [city]", "joke", "quote", "calculate"],
+            "System": ["system", "cpu", "memory", "disk", "battery", "processes"],
+            "Web": ["search [query]", "youtube [query]", "wikipedia [topic]", "news"],
+            "Notes": ["note [title] [text]", "notes", "todo [task]"],
+            "Entertainment": ["game", "fact", "story", "ascii", "roll"],
+            "Settings": ["config", "settings", "backup", "restore"]
+        }
+        
+        for category, commands in help_categories.items():
+            print(f"\n{category}:")
+            print("  " + ", ".join(commands))
+            
+        print("\n" + "-"*70)
+        print("For detailed help on a specific command, type: help [command]")
+        print("Example: help weather")
+        
+        # Check for plugin help
+        if self.plugins.plugins:
+            print("\n🔌 Installed plugins:")
+            for name, plugin in self.plugins.plugins.items():
+                print(f"  {name}: {getattr(plugin, 'description', 'No description')}")
+        
+        input("\nPress Enter to continue...")
+    
+    def run(self):
+        """Main run loop"""
+        try:
+            # Initialize
+            if not self.initialize():
+                return False
+            
+            self.running = True
+            self.show_welcome()
+            
+            # Main loop
+            while self.running:
+                try:
+                    if not self.show_menu():
+                        break
+                        
+                except KeyboardInterrupt:
+                    print("\n\n⏹️ Interrupted by user")
+                    break
+                except Exception as e:
+                    print(f"❌ Error: {e}")
+                    self.logger.error(f"Main loop error: {e}")
+                    continue
+            
+            # Shutdown
+            self.shutdown()
+            return True
+            
+        except Exception as e:
+            print(f"💥 Fatal error: {e}")
+            traceback.print_exc()
+            return False
+    
+    def shutdown(self):
+        """Clean shutdown"""
+        print("\n" + "="*70)
+        print("🛑 Shutting down Jarvis...")
+        print("="*70)
+        
+        # Save all data
+        print("📝 Saving data...")
+        if self.commands:
+            self.commands.save_data()
+        
+        if self.db:
+            self.db.remember("last_shutdown", str(datetime.datetime.now()))
+        
+        self.save_preferences()
+        
+        # Stop background threads
+        self.running = False
+        
+        # Clear resources
+        if self.speech:
+            print("🔊 Stopping speech...")
+            self.speech.cleanup()
+        
+        if self.logger:
+            self.logger.info("Jarvis shutdown complete")
+        
+        # Show summary
+        stats = self.performance.get_stats()
+        print(f"\n📊 Session Summary:")
+        print(f"  Uptime: {stats['uptime']/3600:.1f} hours")
+        print(f"  Commands: {stats['total_commands']}")
+        print(f"  Avg response: {stats['avg_response_time']*1000:.1f}ms")
+        
+        print("\n✅ Jarvis has been shut down. Goodbye! 👋")
+        
+        # Speak goodbye
+        goodbyes = [
+            "Goodbye! Have a wonderful day!",
+            "Until next time! Take care!",
+            "Signing off! It was great helping you!",
+            "Farewell, my friend!"
+        ]
+        self.speech.speak(random.choice(goodbyes))
+
+
+def main():
+    """Main entry point - RUN THIS!"""
+    print("🚀 Starting Jarvis AI Assistant...")
+    print("Loading enhanced features...")
+    
+    try:
+        # Create and run assistant
+        assistant = JarvisAssistant()
+        result = assistant.run()
+        
+        if result:
+            print("\n✨ Jarvis session completed successfully")
+        else:
+            print("\n⚠️ Jarvis session ended with issues")
+            
+    except KeyboardInterrupt:
+        print("\n\n👋 Goodbye! Thanks for using Jarvis!")
+    except Exception as e:
+        print(f"💥 Application failed: {e}")
+        traceback.print_exc()
+        return 1
+    
+    return 0
+
+
+if __name__ == "__main__"
