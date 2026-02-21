@@ -819,4 +819,242 @@ class JarvisAssistant:
                     print(f"Not quite. Try again! ({attempts} attempts left)")
                 else:
                     print(f"The answer was: {puzzle['answer']}")
+        def _show_ascii_art(self):
+        """Show ASCII art"""
+        arts = {
+            "robot": """
+    ╱|、
+   (˚ˎ 。7  
+    |、˜〵          
+    じしˍ,)ノ
+            """,
+            "cat": """
+     /\_/\\
+    ( o.o )
+     > ^ <
+            """,
+            "jarvis": """
+     ╔╦╗╦═╗╦ ╦╔╦╗╔═╗
+     ║║║╠╦╝║ ║ ║ ║ ║
+     ╩ ╩╩╚═╚═╝ ╩ ╚═╝
+            """
+        }
+        
+        print("\n🎨 ASCII ART")
+        for name, art in arts.items():
+            print(f"\n{name.title()}:{art}")
     
+    def plugin_mode(self):
+        """Plugin management"""
+        print("\n" + "="*70)
+        print("🔌 PLUGIN MANAGER")
+        print("="*70)
+        
+        plugins = self.plugins.get_plugin_info()
+        
+        if not plugins:
+            print("\nNo plugins installed.")
+            print("\nTo install plugins:")
+            print("1. Create a .py file in the 'plugins' directory")
+            print("2. Add a setup(jarvis) function")
+            print("3. Define description, version, and author attributes")
+        else:
+            print(f"\nActive plugins ({len(plugins)}):")
+            for i, plugin in enumerate(plugins, 1):
+                print(f"\n  {i}. {plugin['name']} v{plugin['version']}")
+                print(f"     {plugin['description']}")
+                print(f"     by {plugin['author']}")
+                
+        input("\nPress Enter to continue...")
+    
+    def settings_mode(self):
+        """Enhanced settings"""
+        print("\n" + "="*70)
+        print("⚙️ SETTINGS")
+        print("="*70)
+        
+        while True:
+            print(f"\nCurrent settings:")
+            print(f"  1. AI Model: {self.config['openai']['model']}")
+            print(f"  2. Voice: {'Enabled' if self.config['speech']['enabled'] else 'Disabled'}")
+            print(f"  3. Voice Speed: {self.user_preferences.get('voice_speed', 1.0)}x")
+            print(f"  4. Theme: {self.user_preferences.get('theme', 'default')}")
+            print(f"  5. Auto-save: {self.user_preferences.get('auto_save', True)}")
+            print(f"  6. Notification Sound: {self.user_preferences.get('notification_sound', True)}")
+            print(f"  7. Show current config")
+            print(f"  8. Reload config")
+            print(f"  9. Clear conversation history")
+            print(f"  10. Backup data")
+            print(f"  11. Restore backup")
+            print(f"  12. Back to main menu")
+            
+            choice = input("\nSelect option (1-12): ").strip()
+            
+            if choice == "12":
+                break
+            elif choice == "1":
+                model = input(f"Enter new model [current: {self.config['openai']['model']}]: ").strip()
+                if model:
+                    self.config['openai']['model'] = model
+                    print(f"✅ Model updated to: {model}")
+            elif choice == "2":
+                enabled = not self.config['speech']['enabled']
+                self.config['speech']['enabled'] = enabled
+                print(f"✅ Voice {'enabled' if enabled else 'disabled'}")
+            elif choice == "3":
+                speed = input("Enter voice speed (0.5-2.0): ").strip()
+                try:
+                    speed = float(speed)
+                    if 0.5 <= speed <= 2.0:
+                        self.user_preferences['voice_speed'] = speed
+                        print(f"✅ Voice speed set to {speed}x")
+                except ValueError:
+                    print("❌ Invalid speed")
+            elif choice == "4":
+                themes = ['default', 'dark', 'light', 'colorful']
+                print(f"Themes: {', '.join(themes)}")
+                theme = input("Enter theme: ").strip().lower()
+                if theme in themes:
+                    self.user_preferences['theme'] = theme
+                    print(f"✅ Theme set to {theme}")
+            elif choice == "5":
+                auto_save = not self.user_preferences.get('auto_save', True)
+                self.user_preferences['auto_save'] = auto_save
+                print(f"✅ Auto-save {'enabled' if auto_save else 'disabled'}")
+            elif choice == "6":
+                sound = not self.user_preferences.get('notification_sound', True)
+                self.user_preferences['notification_sound'] = sound
+                print(f"✅ Notification sound {'enabled' if sound else 'disabled'}")
+            elif choice == "7":
+                self.commands.process("config")
+            elif choice == "8":
+                self.config = ConfigManager().reload_config()
+                print("✅ Configuration reloaded")
+            elif choice == "9":
+                self.ai.clear_history()
+                print("✅ Conversation history cleared")
+            elif choice == "10":
+                self._backup_data()
+            elif choice == "11":
+                self._restore_backup()
+                
+        self.save_preferences()
+    
+    def _backup_data(self):
+        """Create a backup of all data"""
+        try:
+            backup_dir = Path("backups")
+            backup_dir.mkdir(exist_ok=True)
+            
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = backup_dir / f"backup_{timestamp}.zip"
+            
+            import zipfile
+            with zipfile.ZipFile(backup_file, 'w') as zipf:
+                for folder in ['data', 'logs', 'config']:
+                    folder_path = Path(folder)
+                    if folder_path.exists():
+                        for file in folder_path.rglob('*'):
+                            if file.is_file():
+                                zipf.write(file, file.relative_to(Path('.')))
+                                
+            print(f"✅ Backup created: {backup_file}")
+            self.notification_queue.put({
+                'title': 'Backup Complete',
+                'message': f'Data backed up to {backup_file.name}'
+            })
+            
+        except Exception as e:
+            print(f"❌ Backup failed: {e}")
+    
+    def _restore_backup(self):
+        """Restore from backup"""
+        backup_dir = Path("backups")
+        if not backup_dir.exists():
+            print("❌ No backups found")
+            return
+            
+        backups = list(backup_dir.glob("*.zip"))
+        if not backups:
+            print("❌ No backups found")
+            return
+            
+        print("\nAvailable backups:")
+        for i, backup in enumerate(backups, 1):
+            size = backup.stat().st_size / 1024 / 1024
+            print(f"  {i}. {backup.name} ({size:.1f} MB)")
+            
+        try:
+            choice = int(input("\nSelect backup to restore (0 to cancel): "))
+            if 1 <= choice <= len(backups):
+                backup_file = backups[choice-1]
+                
+                import zipfile
+                with zipfile.ZipFile(backup_file, 'r') as zipf:
+                    zipf.extractall('.')
+                    
+                print(f"✅ Restored from {backup_file.name}")
+                print("⚠️ Please restart Jarvis for changes to take effect")
+            elif choice != 0:
+                print("❌ Invalid choice")
+        except ValueError:
+            print("❌ Invalid input")
+    
+    def command_mode(self):
+        """Quick command mode"""
+        print("\n" + "="*70)
+        print("⚡ COMMAND MODE - Type 'back' to return to menu")
+        print("="*70)
+        print("\nQuick commands:")
+        print("  time / date / weather [city] / joke / quote")
+        print("  open [app] / search [query] / calculate [math]")
+        print("  system / ip / ping [host] / clear")
+        print("  remember [key] [value] / recall [key]")
+        print("  mood / stats / fact / game")
+        print("-"*70)
+        
+        while True:
+            try:
+                user_input = input("\nCommand: ").strip()
+                
+                if not user_input:
+                    continue
+                    
+                if user_input.lower() in ['back', 'menu', 'exit']:
+                    break
+                
+                # Measure command execution
+                result, duration = self.performance.measure_command(
+                    self.commands.process
+                )(user_input)
+                
+                print(f"⏱️ Command completed in {duration*1000:.1f}ms")
+                
+            except KeyboardInterrupt:
+                print("\n⏹️ Returning to menu...")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def notes_mode(self):
+        """Enhanced notes and todo management"""
+        print("\n" + "="*70)
+        print("📝 NOTES & TODO - Type 'back' to return to menu")
+        print("="*70)
+        print("\nCommands:")
+        print("  note [title] [content]   - Take a note")
+        print("  notes [category]          - View all notes")
+        print("  note search [text]        - Search notes")
+        print("  note edit [#] [content]   - Edit note")
+        print("  note delete [#]            - Delete note")
+        print("  note pin [#]               - Pin note")
+        print("  todo add [task]            - Add todo")
+        print("  todo list [category]       - View todos")
+        print("  todo complete [#]          - Complete todo")
+        print("  todo remove [#]            - Remove todo")
+        print("  todo clear                 - Clear completed")
+        print("  todo due [#] [date]        - Set due date")
+        print("-"*70)
+        
+:
+    sys.exit(main())
