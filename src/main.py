@@ -1058,3 +1058,280 @@ class JarvisAssistant:
         
 :
     sys.exit(main())
+        while True:
+            try:
+                user_input = input("\nNotes> ").strip()
+                
+                if not user_input:
+                    continue
+                    
+                if user_input.lower() in ['back', 'menu', 'exit']:
+                    break
+                
+                # Parse and process notes commands
+                parts = user_input.split()
+                cmd = parts[0].lower()
+                
+                if cmd == "note":
+                    if len(parts) >= 3 and parts[1] == "search":
+                        search_term = " ".join(parts[2:])
+                        self._search_notes(search_term)
+                    elif len(parts) >= 3:
+                        title = parts[1]
+                        content = " ".join(parts[2:])
+                        note_id = self.db.add_note(title, content)
+                        print(f"✅ Note #{note_id} saved: {title}")
+                    else:
+                        self._list_notes()
+                        
+                elif cmd == "todo":
+                    self._handle_todo(parts)
+                else:
+                    self.commands.process(user_input)
+                
+            except KeyboardInterrupt:
+                print("\n⏹️ Returning to menu...")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def _search_notes(self, term):
+        """Search notes"""
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, title, content, timestamp 
+                FROM notes 
+                WHERE title LIKE ? OR content LIKE ?
+                ORDER BY pinned DESC, timestamp DESC
+            ''', (f'%{term}%', f'%{term}%'))
+            
+            results = cursor.fetchall()
+            
+            if results:
+                print(f"\n📝 Found {len(results)} notes:")
+                for id, title, content, ts in results:
+                    time_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                    preview = content[:50] + "..." if len(content) > 50 else content
+                    print(f"\n  #{id}: {title} ({time_str})")
+                    print(f"      {preview}")
+            else:
+                print("No notes found")
+    
+    def _list_notes(self, category=None):
+        """List notes"""
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            if category:
+                cursor.execute('''
+                    SELECT id, title, timestamp, pinned 
+                    FROM notes 
+                    WHERE category = ?
+                    ORDER BY pinned DESC, timestamp DESC
+                ''', (category,))
+            else:
+                cursor.execute('''
+                    SELECT id, title, timestamp, pinned 
+                    FROM notes 
+                    ORDER BY pinned DESC, timestamp DESC
+                ''')
+            
+            notes = cursor.fetchall()
+            
+            if notes:
+                print(f"\n📝 Notes ({len(notes)}):")
+                for id, title, ts, pinned in notes:
+                    time_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                    pin_mark = "📌" if pinned else "  "
+                    print(f"  {pin_mark} #{id}: {title} ({time_str})")
+            else:
+                print("No notes found")
+    
+    def _handle_todo(self, parts):
+        """Handle todo commands"""
+        if len(parts) < 2:
+            self._list_todos()
+            return
+            
+        subcmd = parts[1].lower()
+        
+        if subcmd == "add" and len(parts) >= 3:
+            task = " ".join(parts[2:])
+            task_id = self.db.add_task(task)
+            print(f"✅ Task #{task_id} added: {task}")
+            
+        elif subcmd == "list":
+            category = parts[2] if len(parts) >= 3 else None
+            self._list_todos(category)
+            
+        elif subcmd == "complete" and len(parts) >= 3:
+            try:
+                task_id = int(parts[2])
+                with self.db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE tasks SET completed = 1 
+                        WHERE id = ?
+                    ''', (task_id,))
+                    conn.commit()
+                    if cursor.rowcount > 0:
+                        print(f"✅ Task #{task_id} completed!")
+                    else:
+                        print(f"❌ Task #{task_id} not found")
+            except ValueError:
+                print("❌ Invalid task ID")
+                
+        elif subcmd == "remove" and len(parts) >= 3:
+            try:
+                task_id = int(parts[2])
+                with self.db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+                    conn.commit()
+                    if cursor.rowcount > 0:
+                        print(f"✅ Task #{task_id} removed")
+                    else:
+                        print(f"❌ Task #{task_id} not found")
+            except ValueError:
+                print("❌ Invalid task ID")
+                
+        elif subcmd == "clear":
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM tasks WHERE completed = 1')
+                conn.commit()
+                print(f"✅ Cleared {cursor.rowcount} completed tasks")
+                
+        elif subcmd == "due" and len(parts) >= 4:
+            try:
+                task_id = int(parts[2])
+                due_date = parts[3]
+                # Simple date parsing - could be enhanced
+                with self.db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE tasks SET due = ? 
+                        WHERE id = ?
+                    ''', (due_date, task_id))
+                    conn.commit()
+                    print(f"✅ Due date set for task #{task_id}")
+            except ValueError:
+                print("❌ Invalid input")
+    
+    def _list_todos(self, category=None):
+        """List todos"""
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            if category:
+                cursor.execute('''
+                    SELECT id, task, priority, completed, due 
+                    FROM tasks 
+                    WHERE category = ? AND completed = 0
+                    ORDER BY priority, due
+                ''', (category,))
+            else:
+                cursor.execute('''
+                    SELECT id, task, priority, completed, due 
+                    FROM tasks 
+                    WHERE completed = 0
+                    ORDER BY priority, due
+                ''')
+            
+            tasks = cursor.fetchall()
+            
+            if tasks:
+                print(f"\n📋 Todo list ({len(tasks)}):")
+                for id, task, priority, completed, due in tasks:
+                    priority_mark = "🔴" if priority <= 2 else "🟡" if priority <= 4 else "🟢"
+                    due_str = f" (due: {due})" if due else ""
+                    print(f"  {priority_mark} #{id}: {task}{due_str}")
+            else:
+                print("No pending tasks!")
+    
+    def system_mode(self):
+        """Enhanced system tools"""
+        print("\n" + "="*70)
+        print("🛠️ SYSTEM TOOLS - Type 'back' to return to menu")
+        print("="*70)
+        print("\nSystem commands:")
+        print("  system     - System information")
+        print("  processes  - Running processes")
+        print("  disk       - Disk usage")
+        print("  network    - Network information")
+        print("  battery    - Battery status")
+        print("  cpu        - CPU usage")
+        print("  memory     - Memory usage")
+        print("  users      - Logged in users")
+        print("  services   - Running services")
+        print("  shutdown   - System shutdown (admin)")
+        print("  restart    - System restart (admin)")
+        print("-"*70)
+        
+        while True:
+            try:
+                user_input = input("\nSystem> ").strip()
+                
+                if not user_input:
+                    continue
+                    
+                if user_input.lower() in ['back', 'menu', 'exit']:
+                    break
+                
+                # Enhanced system commands
+                if user_input.lower() == "cpu":
+                    self._show_cpu_usage()
+                elif user_input.lower() == "memory":
+                    self._show_memory_usage()
+                elif user_input.lower() == "disk":
+                    self._show_disk_usage()
+                elif user_input.lower() == "battery":
+                    self._show_battery_status()
+                elif user_input.lower() == "users":
+                    self._show_logged_users()
+                elif user_input.lower() == "services":
+                    self._show_services()
+                else:
+                    self.commands.process(user_input)
+                
+            except KeyboardInterrupt:
+                print("\n⏹️ Returning to menu...")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def _show_cpu_usage(self):
+        """Show CPU usage"""
+        try:
+            import psutil
+            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_count = psutil.cpu_count()
+            cpu_freq = psutil.cpu_freq()
+            
+            print(f"\n🖥️ CPU Information:")
+            print(f"  Usage: {cpu_percent}%")
+            print(f"  Cores: {cpu_count}")
+            if cpu_freq:
+                print(f"  Frequency: {cpu_freq.current:.0f} MHz")
+                
+            # Create ASCII bar
+            bar_length = 50
+            filled = int(bar_length * cpu_percent / 100)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            print(f"\n  [{bar}] {cpu_percent}%")
+            
+        except ImportError:
+            print("psutil not installed. Install with: pip install psutil")
+        except Exception as e:
+            print(f"Error getting CPU info: {e}")
+    
+    def _show_memory_usage(self):
+        """Show memory usage"""
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            
+            print(f"\n🧠 Memory Information:")
+            print(f"  Total: {memory.total / (1024**3):.1f} GB")
+            print(f"  Available: {memory.available / (1024**3):.1f} GB")
+            print(f"  Used: {memory.used / (1024**3):.1f} GB ({memory.percent}%)")
+            
